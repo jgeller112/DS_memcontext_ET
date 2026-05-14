@@ -1088,7 +1088,7 @@ recognitionServer <- function(id) {
 }
 
 ui <- page_navbar(
-  title = "DS mem-context ET — behavioral + ET summaries",
+  title = "DS-Mem-Emo",
   theme = bs_theme(version = 5),
   nav_panel(
     "Encoding",

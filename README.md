@@ -5,6 +5,11 @@ End-to-end pipeline for the DS memory-context eye-tracking study. Two groups
 (**encoding** + **recognition**), with PsychoPy behavioral CSVs and Tobii
 gaze + msg CSVs.
 
+**Live app — [DS-Mem-Emo](https://connect.posit.cloud/jgeller112/DS-Mem-Emo)**
+*(replace this URL with the actual deployed link once Posit Connect Cloud
+gives you one — the format is `https://connect.posit.cloud/content/<id>` or
+`https://<your-id>.shinyapps.io/ds-mem-emo/` depending on the host)*
+
 The repo has two faces:
 
 | | what it is |
@@ -68,7 +73,7 @@ rsconnect::setAccountInfo(
   token  = "<token>",
   secret = "<secret>"
 )
-rsconnect::deployApp("app", appName = "ds-memcontext-et")
+rsconnect::deployApp("app", appName = "DS-Mem-Emo")
 ```
 
 Note: `kollaR` is in CRAN, so it installs cleanly on shinyapps.io.
