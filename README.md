@@ -61,19 +61,3 @@ if your setup differs):
 I-VT parameters match Tobii Pro Lab defaults (30 °/s, 60 ms min fixation,
 75 ms merge gap, 0.5° merge angle, `one_degree = 40 px/deg`).
 
-## Deploy to shinyapps.io
-
-```r
-# one-time, with credentials from https://www.shinyapps.io/admin/#/tokens
-rsconnect::setAccountInfo(
-  name   = "<your-shinyapps-name>",
-  token  = "<token>",
-  secret = "<secret>"
-)
-rsconnect::deployApp("app", appName = "DS-Mem-Emo")
-```
-
-Note: `kollaR` is in CRAN, so it installs cleanly on shinyapps.io.
-`eyesim` (used by the qmd only, not the app) is GitHub-only and would need
-`remotes::install_github("bbuchsbaum/eyesim")` baked into the deploy
-environment if you extend the app to include reinstatement.
