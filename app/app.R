@@ -135,6 +135,63 @@ heatmap_plot <- function(fix_df, img_array, stim_name, title) {
     theme_minimal()
 }
 
+okabe_ito <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442",
+               "#0072B2", "#D55E00", "#CC79A7", "#000000")
+
+# Build a box plot with jittered participant dots, used by both the encoding
+# and recognition Summary plots tabs. `df` should already carry whichever
+# categorical columns the X / fill / facet specs reference.
+boxplot_summary <- function(df, y_var, x_var, fill_var, facet_var) {
+  y_label <- c(
+    mean_total_dwell_time = "Mean total dwell time (ms)",
+    mean_n_fixations      = "Mean number of fixations",
+    mean_fix_duration     = "Mean fixation duration (ms)",
+    n_trials              = "Number of trials"
+  )[y_var]
+
+  df <- df |>
+    dplyr::mutate(dplyr::across(
+      dplyr::any_of(c("AOI", "location", "emo", "Condition", "on_object")),
+      as.factor
+    ))
+
+  use_fill <- !is.null(fill_var) && fill_var != "_none"
+  mapping <- if (use_fill) {
+    ggplot2::aes(x = .data[[x_var]], y = .data[[y_var]],
+                 fill = .data[[fill_var]])
+  } else {
+    ggplot2::aes(x = .data[[x_var]], y = .data[[y_var]])
+  }
+
+  p <- ggplot2::ggplot(df, mapping) +
+    ggplot2::geom_boxplot(
+      outlier.shape = NA, alpha = 0.7, color = "black", linewidth = 0.6,
+      position = ggplot2::position_dodge(width = 0.75)
+    ) +
+    ggplot2::geom_point(
+      shape = 21, color = "black", size = 2.4, stroke = 0.5, alpha = 0.85,
+      position = ggplot2::position_jitterdodge(
+        jitter.width = 0.15, dodge.width = 0.75
+      ),
+      show.legend = FALSE
+    ) +
+    ggplot2::theme_minimal(base_size = 14) +
+    ggplot2::theme(
+      axis.title = ggplot2::element_text(face = "bold", size = 14),
+      axis.text  = ggplot2::element_text(face = "bold", size = 14)
+    ) +
+    ggplot2::labs(y = y_label, x = x_var,
+                  fill = if (use_fill) fill_var else NULL)
+
+  if (use_fill) {
+    p <- p + ggplot2::scale_fill_manual(values = okabe_ito)
+  }
+  if (!is.null(facet_var) && facet_var != "_none") {
+    p <- p + ggplot2::facet_wrap(ggplot2::vars(.data[[facet_var]]), ncol = 1)
+  }
+  p
+}
+
 stage_uploaded <- function(fileinput) {
   if (is.null(fileinput) || nrow(fileinput) == 0) {
     return(character())
@@ -347,6 +404,56 @@ phase_outputs_recognition <- function(ns_id) {
       "AOI × Condition rollup",
       dl_csv(ns("dl_fix_by_cond")),
       DTOutput(ns("tbl_fix_by_cond"))
+    ),
+    nav_panel(
+      "Summary plots",
+      card(
+        card_header("Box plots — recognition summary (one dot per participant)"),
+        layout_columns(
+          col_widths = c(3, 3, 3, 3),
+          selectInput(ns("plot_y"), "Y metric",
+            choices = c(
+              "Total dwell time (ms)"       = "mean_total_dwell_time",
+              "Number of fixations"         = "mean_n_fixations",
+              "Mean fixation duration (ms)" = "mean_fix_duration",
+              "Number of trials"            = "n_trials"
+            )
+          ),
+          selectInput(ns("plot_x"), "X grouping",
+            choices = c(
+              "AOI"        = "AOI",
+              "Location"   = "location",
+              "Emotion"    = "emo",
+              "Condition"  = "Condition",
+              "On-object"  = "on_object"
+            ),
+            selected = "Condition"
+          ),
+          selectInput(ns("plot_fill"), "Fill / color",
+            choices = c(
+              "None"       = "_none",
+              "AOI"        = "AOI",
+              "Location"   = "location",
+              "Emotion"    = "emo",
+              "Condition"  = "Condition",
+              "On-object"  = "on_object"
+            ),
+            selected = "AOI"
+          ),
+          selectInput(ns("plot_facet"), "Facet (wrap)",
+            choices = c(
+              "None"       = "_none",
+              "AOI"        = "AOI",
+              "Location"   = "location",
+              "Emotion"    = "emo",
+              "Condition"  = "Condition",
+              "On-object"  = "on_object"
+            ),
+            selected = "_none"
+          )
+        ),
+        plotOutput(ns("plot_summary"), height = "560px")
+      )
     ),
     nav_panel(
       "Fixation viewer",
@@ -578,84 +685,16 @@ encodingServer <- function(id) {
 
     output$plot_summary <- renderPlot({
       req(rv$emoloc)
-      y_var <- input$plot_y
-      x_var <- input$plot_x
-      fill_var <- input$plot_fill
-      facet_var <- input$plot_facet
-
-      y_label <- c(
-        mean_total_dwell_time = "Mean total dwell time (ms)",
-        mean_n_fixations      = "Mean number of fixations",
-        mean_fix_duration     = "Mean fixation duration (ms)",
-        n_trials              = "Number of trials"
-      )[y_var]
-
-      okabe_ito <- c(
-        "#E69F00", "#56B4E9", "#009E73", "#F0E442",
-        "#0072B2", "#D55E00", "#CC79A7", "#000000"
-      )
-
       df <- rv$emoloc |>
         mutate(
-          emo = dplyr::recode(emo, "neg" = "negative", "neu" = "neutral"),
+          emo       = dplyr::recode(emo, "neg" = "negative", "neu" = "neutral"),
           Condition = paste(emo, location, sep = "-"),
           on_object = factor(on_object,
-            levels = c(TRUE, FALSE),
-            labels = c("on object", "off object")
-          )
-        ) |>
-        mutate(across(any_of(c(
-          "AOI", "location", "emo",
-          "Condition", "on_object"
-        )), as.factor))
-
-      use_fill <- fill_var != "_none"
-      mapping <- if (use_fill) {
-        aes(
-          x = .data[[x_var]], y = .data[[y_var]],
-          fill = .data[[fill_var]]
+                             levels = c(TRUE, FALSE),
+                             labels = c("on object", "off object"))
         )
-      } else {
-        aes(x = .data[[x_var]], y = .data[[y_var]])
-      }
-
-      p <- ggplot(df, mapping) +
-        geom_boxplot(
-          outlier.shape = NA,
-          alpha = 0.7,
-          color = "black",
-          linewidth = 0.6,
-          position = position_dodge(width = 0.75)
-        ) +
-        geom_point(
-          shape = 21,
-          color = "black",
-          size = 2.4,
-          stroke = 0.5,
-          alpha = 0.85,
-          position = position_jitterdodge(
-            jitter.width = 0.15,
-            dodge.width  = 0.75
-          ),
-          show.legend = FALSE
-        ) +
-        theme_minimal(base_size = 14) +
-        theme(
-          axis.title = element_text(face = "bold", size = 14),
-          axis.text  = element_text(face = "bold", size = 14)
-        ) +
-        labs(
-          y = y_label, x = x_var,
-          fill = if (use_fill) fill_var else NULL
-        )
-
-      if (use_fill) {
-        p <- p + scale_fill_manual(values = okabe_ito)
-      }
-      if (facet_var != "_none") {
-        p <- p + facet_wrap(vars(.data[[facet_var]]), ncol = 1)
-      }
-      p
+      boxplot_summary(df, input$plot_y, input$plot_x,
+                      input$plot_fill, input$plot_facet)
     })
 
     viz_images <- reactive({
@@ -961,6 +1000,36 @@ recognitionServer <- function(id) {
     output$tbl_fixations <- renderDT(req(rv$fixations) |> render_dt())
     output$tbl_fix_summary <- renderDT(req(rv$fix_summary) |> render_dt())
     output$tbl_fix_by_cond <- renderDT(req(rv$fix_by_cond) |> render_dt())
+
+    # Recognition summary plots: roll the per-trial fix_summary up to one
+    # row per (participant, Condition, AOI), then derive emo / location /
+    # on_object from Condition so the same X / fill / facet choices work
+    # as on the encoding tab.
+    output$plot_summary <- renderPlot({
+      req(rv$fix_summary)
+      df <- rv$fix_summary |>
+        group_by(participant, Condition, AOI) |>
+        summarise(
+          mean_total_dwell_time = mean(total_dwell_time,  na.rm = TRUE),
+          mean_n_fixations      = mean(n_fixations,       na.rm = TRUE),
+          mean_fix_duration     = mean(mean_fix_duration, na.rm = TRUE),
+          n_trials              = dplyr::n(),
+          .groups = "drop"
+        ) |>
+        mutate(
+          emo       = dplyr::recode(
+            stringr::str_extract(Condition, "^[^-]+"),
+            "neg" = "negative", "neu" = "neutral"
+          ),
+          location  = stringr::str_extract(Condition, "(?<=-).+$"),
+          on_object = factor(AOI == stringr::str_to_title(location),
+                             levels = c(TRUE, FALSE),
+                             labels = c("on object", "off object")),
+          Condition = paste(emo, location, sep = "-")
+        )
+      boxplot_summary(df, input$plot_y, input$plot_x,
+                      input$plot_fill, input$plot_facet)
+    })
 
     viz_images <- reactive({
       paths <- stage_uploaded(input$stim_images)
