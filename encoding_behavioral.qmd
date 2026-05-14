@@ -1,0 +1,1289 @@
+---
+title: "DS Encoding & Recognition — Behavioral + ET"
+format: html
+editor: source
+---
+
+## Overview
+
+End-to-end pipeline for the DS memory-context eye-tracking study. Two
+phases:
+
+- **Encoding** — participants view background scenes paired with an object
+  on either the left or right side. Each composite stim filename encodes
+  `<background>.<object>.<emo>.<location>.jpeg`.
+- **Recognition** — participants make old/new judgments on backgrounds.
+  Eye tracking is recorded only during the background-task.
+
+Two participant groups: **TD** (typically developing, in `Data/TD/`) and
+**DS** (Down syndrome, mirrored layout in `Data/DS/`). This doc currently
+runs against TD; flip the paths in the `paths` chunk to run DS.
+
+**Conventions used throughout**
+
+- Screen: 1920 × 1080 px, y grows downward in screen coords.
+- Picture displayed at 700 × 550 px centered on screen → bounds
+  x: 610–1310, y: 265–815. Left/Right AOIs split that box at x = 960.
+- Tobii `system_time_stamp` is microseconds → divide by 1000 for ms.
+- I-VT params match Tobii Pro Lab defaults (30°/s, 60 ms min fixation,
+  75 ms merge gap, 0.5° merge angle); `one_degree = 40 px/deg` assumes
+  ~65 cm viewing on a 24″ 1920×1080 monitor — recompute for your setup.
+
+**Key outputs**
+
+| object | what it is |
+|---|---|
+| `encoding`, `recognition` | per-trial behavioral tables |
+| `gaze_trial`, `recognition_gaze_trial` | gaze samples assigned to trials |
+| `fixations`, `recognition_fixations` | I-VT fixation events |
+| `fix_labeled` | encoding fixations + AOI label (Left / Right / Outside) |
+| `recognition_acc`, `recognition_acc_by_condition` | hit/FA/d′/c |
+| `validation`, `recognition_validation` | per-validation calibration metrics |
+| `reinstatement` | encoding↔recognition fixation-pattern similarity |
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+```
+
+## Paths
+
+Each data type lives in its own folder. Files are matched by participant ID
+parsed from the filename (`^DS\d+[_-]\d+` — IDs use either `_` or `-`).
+
+```{r paths}
+# TD = typically developing. Mirror this layout under Data/DS/ for the
+# Down syndrome group when those data come in.
+td_behavioral_dir <- here("Data", "TD", "Behavioral")
+td_et_dir         <- here("Data", "TD", "Eye_tracking")
+
+behavioral_dir <- file.path(td_behavioral_dir, "encoding")
+gaze_dir       <- file.path(td_et_dir,         "encoding",    "raw_gaze_msg")
+msg_dir        <- gaze_dir
+
+recognition_behavioral_dir <- file.path(td_behavioral_dir, "recognition")
+recognition_gaze_dir       <- file.path(td_et_dir,         "recognition", "raw_gaze_msg")
+recognition_msg_dir        <- recognition_gaze_dir
+
+# Group label gets stamped into the output directory so TD and DS results
+# stay separate. Change to "DS" when running the DS group through.
+group_label <- "TD"
+output_dir  <- here("output", group_label)
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+screen_w_px <- 1920
+screen_h_px <- 1080
+
+extract_pid <- function(path) str_extract(basename(path), "^DS\\d+[_-]\\d+")
+```
+
+## Loaders
+
+Each loader takes a single file path and returns a tibble tagged with
+`participant`. The pipelines below map them over every file in the
+corresponding folder.
+
+| function | reads | returns |
+|---|---|---|
+| `read_behavioral` | encoding PsychoPy CSV | one row per trial |
+| `read_recognition_behavioral` | recognition PsychoPy CSV | one row per back-task trial (≤90) |
+| `read_gaze` | Tobii gaze CSV | one row per sample, x/y in px |
+| `read_msg` | Tobii msg CSV | one row per event message |
+| `parse_validation` | a `msg` tibble | one row per validation block, metrics as numeric columns |
+| `recognition_accuracy` | recognition tibble | per-group HR / FAR / d′ / c (log-linear corrected) |
+| `downsample_gaze` | gaze tibble | gaze binned to a fixed sample rate |
+
+```{r loaders}
+read_behavioral <- function(path) {
+  read_csv(path, show_col_types = FALSE) |>
+    filter(!is.na(Background), !is.na(Object), !is.na(Condition)) |>
+    mutate(
+      participant = extract_pid(path),
+      trial       = row_number(), 
+      phase = "encoding"
+      ) |>
+    select(
+      participant,
+      trial,
+      Background,
+      Object,
+      Condition,
+      List,
+      mouse_clicked_name = mouse.clicked_name, 
+      phase
+    ) 
+}
+
+read_gaze <- function(path) {
+  read_csv(path, show_col_types = FALSE) |>
+    select(
+      system_time_stamp,
+      left_gaze_point_on_display_area_x,
+      left_gaze_point_on_display_area_y,
+      right_gaze_point_on_display_area_x,
+      right_gaze_point_on_display_area_y
+    ) |>
+    mutate(
+      participant = extract_pid(path),
+      time_ms     = system_time_stamp / 1000,
+      left_x_px   = left_gaze_point_on_display_area_x  * screen_w_px,
+      left_y_px   = left_gaze_point_on_display_area_y  * screen_h_px,
+      right_x_px  = right_gaze_point_on_display_area_x * screen_w_px,
+      right_y_px  = right_gaze_point_on_display_area_y * screen_h_px,
+      avg_x_px    = rowMeans(cbind(left_x_px, right_x_px), na.rm = TRUE),
+      avg_y_px    = rowMeans(cbind(left_y_px, right_y_px), na.rm = TRUE)
+    ) |>
+    select(
+      participant,
+      system_time_stamp,
+      time_ms,
+      left_x_px, left_y_px,
+      right_x_px, right_y_px,
+      avg_x_px, avg_y_px
+    )
+}
+
+read_msg <- function(path) {
+  read_csv(path, show_col_types = FALSE) |>
+    mutate(participant = extract_pid(path)) |>
+    select(participant, system_time_stamp, msg)
+}
+
+# Recognition behavioral CSV. Column names assume PsychoPy headers — adjust
+# if your task spreadsheet uses different ones (e.g. `key_resp.keys`,
+# `key_resp.corr`).
+read_recognition_behavioral <- function(path) {
+  read_csv(path, show_col_types = FALSE) |>
+    # Eye tracking was recorded only during the background task; back.started
+    # is populated only on those trials. Hard-cap at 90 trials in case any
+    # extra rows slip through.
+    filter(!is.na(back.started)) |>
+    slice_head(n = 90) |>
+    mutate(
+      participant = extract_pid(path),
+      trial       = row_number(), 
+      phase = "recognition"
+    ) |>
+    select(
+      participant,
+      trial,
+      Background,
+      Composite,
+      Object,
+      Condition,
+      stimulus_status,
+      List,
+      response,
+      accuracy, 
+      phase
+    )
+}
+
+# Recognition-test accuracy summary. Returns one row per group with
+# n_old / n_new, hit rate, false-alarm rate, overall accuracy, d-prime, and
+# criterion (c). Use `groupvars` to break down by participant, Condition,
+# etc. — defaults to per-participant. Stuart–Maxwell-style log-linear
+# correction (Hautus 1995) is applied when HR or FAR hits 0/1.
+recognition_accuracy <- function(data, groupvars = "participant",
+                                 status_col = "stimulus_status",
+                                 accuracy_col = "accuracy",
+                                 old_label = "old",
+                                 new_label = "new") {
+  data |>
+    group_by(across(all_of(groupvars))) |>
+    summarise(
+      n_old   = sum(.data[[status_col]] == old_label, na.rm = TRUE),
+      n_new   = sum(.data[[status_col]] == new_label, na.rm = TRUE),
+      n_hit   = sum(.data[[status_col]] == old_label &
+                      .data[[accuracy_col]] == 1, na.rm = TRUE),
+      n_cr    = sum(.data[[status_col]] == new_label &
+                      .data[[accuracy_col]] == 1, na.rm = TRUE),
+      n_total = sum(!is.na(.data[[accuracy_col]])),
+      n_correct = sum(.data[[accuracy_col]] == 1, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    mutate(
+      n_fa     = n_new - n_cr,
+      n_miss   = n_old - n_hit,
+      accuracy = n_correct / n_total,
+      # log-linear correction: add 0.5 to hits/FAs and 1 to old/new totals
+      hit_rate = (n_hit + 0.5) / (n_old + 1),
+      fa_rate  = (n_fa  + 0.5) / (n_new + 1),
+      d_prime  = qnorm(hit_rate) - qnorm(fa_rate),
+      c_bias   = -0.5 * (qnorm(hit_rate) + qnorm(fa_rate))
+    )
+}
+
+# Bin gaze samples to a uniform rate (default 120 Hz = ~8.333 ms bins) by
+# averaging x/y within each bin. Use this to give every trial a known
+# sampling rate before preprocessing + I-VT.
+downsample_gaze <- function(dataframe, bin.length = 1000 / 120,
+                            timevar = "timestamp",
+                            aggvars = c("participant", "trial", "time_bin")) {
+  dataframe <- dataframe |>
+    mutate(time_bin = floor(.data[[timevar]] / bin.length) * bin.length)
+
+  if (identical(aggvars, "none")) return(dataframe)
+
+  dataframe |>
+    group_by(across(all_of(aggvars))) |>
+    summarize(
+      left_x_px  = mean(left_x_px,  na.rm = TRUE),
+      left_y_px  = mean(left_y_px,  na.rm = TRUE),
+      right_x_px = mean(right_x_px, na.rm = TRUE),
+      right_y_px = mean(right_y_px, na.rm = TRUE),
+      avg_x_px   = mean(avg_x_px,   na.rm = TRUE),
+      avg_y_px   = mean(avg_y_px,   na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+# Parse the "validation data quality" rows in a msg tibble into one row per
+# validation block, with each metric as a numeric column.
+parse_validation <- function(msg_df) {
+  msg_df |>
+    filter(str_detect(msg, "^validation data quality")) |>
+    mutate(
+      Dev_L  = as.numeric(str_match(msg, "Dev_L:\\s*([0-9.]+)")[, 2]),
+      Dev_R  = as.numeric(str_match(msg, "Dev_R:\\s*([0-9.]+)")[, 2]),
+      RMS_L  = as.numeric(str_match(msg, "RMS_L:\\s*([0-9.]+)")[, 2]),
+      RMS_R  = as.numeric(str_match(msg, "RMS_R:\\s*([0-9.]+)")[, 2]),
+      LOSS_L = as.numeric(str_match(msg, "LOSS_L:\\s*([0-9.]+)")[, 2]),
+      LOSS_R = as.numeric(str_match(msg, "LOSS_R:\\s*([0-9.]+)")[, 2]),
+      SD_L   = as.numeric(str_match(msg, "SD_L:\\s*([0-9.]+)")[, 2]),
+      SD_R   = as.numeric(str_match(msg, "SD_R:\\s*([0-9.]+)")[, 2])
+    ) |>
+    select(participant, system_time_stamp,
+           Dev_L, Dev_R, RMS_L, RMS_R, LOSS_L, LOSS_R, SD_L, SD_R)
+}
+```
+
+# Encoding
+
+## Behavioral
+
+Stack every encoding behavioral CSV in `behavioral_dir` into one tibble
+keyed on `(participant, trial)`. Trial number is the filtered row order
+within the file — non-task rows (e.g. instructions) are dropped first by
+requiring `Background`, `Object`, and `Condition` to be non-NA.
+
+```{r behavioral}
+behavioral_files <- list.files(behavioral_dir, pattern = "\\.csv$",
+                               full.names = TRUE)
+
+encoding <- map(behavioral_files, read_behavioral) |>
+  list_rbind()
+
+encoding
+```
+
+## Eye-tracking data
+
+Load gaze samples and trial-event messages, then assign each gaze sample to a
+trial using the onset/offset timestamps in the msg file. Tobii
+`system_time_stamp` values are in microseconds, so we convert to ms.
+
+```{r load-et}
+gaze_files <- list.files(gaze_dir, pattern = "_gaze\\.csv$", full.names = TRUE)
+msg_files  <- list.files(msg_dir,  pattern = "_msg\\.csv$",  full.names = TRUE)
+
+gaze <- map(gaze_files, read_gaze) |> list_rbind()
+msg  <- map(msg_files,  read_msg)  |> list_rbind()
+```
+
+Pull the `validation data quality` rows out of the msg file and parse each
+metric into its own column. Dev/RMS/SD are in degrees of visual angle,
+LOSS is the proportion of lost samples (0–1). One row per validation block —
+sessions with multiple recalibrations produce multiple rows per participant.
+
+```{r validation}
+validation <- parse_validation(msg)
+validation
+```
+
+Keep msg in long format, dropping calibration/validation rows so only
+`onset_*` / `offset_*` trial markers remain.
+
+```{r msg-long}
+msg_events <- msg |>
+  filter(str_detect(msg, "^(onset|offset)_")) |>
+  mutate(
+    event = str_extract(msg, "^(onset|offset)"),
+    stim  = str_remove(msg, "^(onset|offset)_")
+  ) |>
+  select(participant, system_time_stamp, msg, event, stim)
+
+msg_events
+```
+
+Merge gaze and msg by stacking on `system_time_stamp` and sorting in time
+*within participant*. Then assign `trial`: it ticks up by 1 at every `onset`
+and clears on `offset`, so each gaze sample carries the trial of the window
+it sits in (`NA` outside trials).
+
+```{r merge-et}
+# Per-trial stim lookup (one row per trial within participant) so we can
+# broadcast the stimulus jpeg across every gaze sample in that trial.
+trial_stim <- msg_events |>
+  filter(event == "onset") |>
+  group_by(participant) |>
+  arrange(system_time_stamp, .by_group = TRUE) |>
+  mutate(trial = row_number()) |>
+  ungroup() |>
+  select(participant, trial, stim) |>
+  # stim format: "<background>.<object>.<emo>.<location>.jpeg".
+  # A handful of stims use "_" as the delimiter instead (e.g.
+  # "airport_a_n_r.jpeg") — normalize those onto stim_split so the
+  # original `stim` keeps the on-disk filename (needed for image lookup).
+  mutate(stim_split = if_else(
+    str_count(stim, fixed(".")) < 4,
+    str_replace_all(stim, "_", "."),
+    stim
+  )) |>
+  separate_wider_delim(
+    stim_split,
+    delim = ".",
+    names = c("background", "object", "emo", "location", "ext"),
+    cols_remove = TRUE
+  ) |>
+  select(participant, trial, stim, background, object, emo, location)
+
+gaze_trial <- bind_rows(gaze, msg_events) |>
+  group_by(participant) |>
+  arrange(system_time_stamp, .by_group = TRUE) |>
+  mutate(
+    is_onset      = !is.na(event) & event == "onset",
+    is_offset     = !is.na(event) & event == "offset",
+    onset_run     = cumsum(is_onset),
+    # offsets counted *before* the current row, so the offset row
+    # itself still belongs to the trial it closes.
+    offset_before = lag(cumsum(is_offset), default = 0),
+    in_trial      = onset_run > offset_before,
+    trial         = if_else(in_trial, onset_run, NA_integer_),
+    time_ms       = system_time_stamp / 1000
+  ) |>
+  ungroup() |>
+  select(-stim) |>
+  left_join(trial_stim, by = c("participant", "trial")) |>
+  filter(!is.na(trial)) |>
+  group_by(participant, trial) |>
+  mutate(time_ms = time_ms - time_ms[event == "onset" & !is.na(event)][1]) |>
+  ungroup() |>
+  select(
+    participant,
+    trial,
+    time_ms,
+    msg,
+    event,
+    stim,
+    background, object, emo, location,
+    left_x_px, left_y_px,
+    right_x_px, right_y_px,
+    avg_x_px, avg_y_px
+  )
+
+gaze_trial
+```
+
+Sanity check: every onset has a matching offset per participant, and no
+onset/offset msg row was dropped during the merge.
+
+```{r merge-et-check}
+msg_balance <- msg_events |>
+  group_by(participant) |>
+  summarise(
+    n_onset  = sum(event == "onset"),
+    n_offset = sum(event == "offset"),
+    balanced = n_onset == n_offset,
+    .groups  = "drop"
+  )
+
+stopifnot(all(msg_balance$balanced))
+stopifnot(
+  nrow(filter(gaze_trial, !is.na(event))) == nrow(msg_events)
+)
+
+msg_balance
+```
+
+
+## Preprocess gaze (kollaR)
+
+`kollaR::preprocess_gaze()` interpolates short gaps and applies a moving-mean
+filter, but it expects continuous samples within a single trial — so apply
+it per (participant, trial) via `group_modify()`. It also requires a column
+literally named `timestamp` (in ms) and will choke on the interleaved msg
+rows, so drop those first.
+
+```{r preprocess}
+library(kollaR)
+
+# Downsample to a uniform 120 Hz first so I-VT velocities are computed
+# against a known sample rate (Tobii samples can drop, leaving gaps).
+gaze_120hz <- gaze_trial |>
+  filter(is.na(event)) |>                # drop onset/offset rows
+  rename(timestamp = time_ms) |>
+  downsample_gaze(bin.length = 1000 / 120) |>
+  rename(timestamp = time_bin)
+
+gaze_pp <- gaze_120hz |>
+  group_by(participant, trial) |>
+  group_modify(~ preprocess_gaze(
+    .x,
+    xcol = "avg_x_px",
+    ycol = "avg_y_px"
+  )) |>
+  ungroup()
+
+gaze_pp
+```
+
+## Detect fixations (I-VT)
+
+`kollaR::algorithm_ivt()` returns a **list** (`fixations`, `saccades`,
+`filt.gaze`, `velocity`) per call, so apply it per-trial via `nest()` +
+`map()` and unnest the fixation table.
+
+Parameters set to match Tobii Pro Lab's I-VT (Fixation) filter defaults:
+30°/s velocity threshold, 0.5° merge angle, 60 ms min fixation duration,
+75 ms merge gap, 20 ms velocity window. `one_degree` is pixels-per-degree —
+40 is a reasonable default for a Tobii Spectrum at ~65 cm viewing distance
+on a 24″ 1920×1080 monitor; recompute it from your actual setup if needed.
+
+```{r ivt}
+# Wrap algorithm_ivt() so trials with no valid samples return NULL instead
+# of throwing. Tobii defaults below; recompute one_degree if your setup
+# differs.
+safe_ivt_encoding <- possibly(
+  function(d) algorithm_ivt(
+    d,
+    xcol                   = "avg_x_px",
+    ycol                   = "avg_y_px",
+    velocity.filter.ms     = 20,    # Tobii velocity window
+    velocity.threshold     = 30,    # Tobii I-VT classifier (deg/s)
+    min.fixation.duration  = 60,    # Tobii "discard short fixations"
+    merge.ms.threshold     = 75,    # Tobii max time between fixations
+    distance.threshold     = 0.5,   # Tobii max angle between fixations (deg)
+    one_degree             = 40     # px per degree — adjust to your setup
+  ),
+  otherwise = NULL
+)
+
+ivt_results <- gaze_pp |>
+  nest(.by = c(participant, trial)) |>
+  mutate(ivt = map(data, safe_ivt_encoding))
+
+ivt_failed <- ivt_results |>
+  filter(map_lgl(ivt, is.null)) |>
+  select(participant, trial)
+
+ivt_failed
+
+fixations <- ivt_results |>
+  filter(!map_lgl(ivt, is.null)) |>
+  mutate(fixations = map(ivt, "fixations")) |>
+  select(participant, trial, fixations) |>
+  unnest(fixations)
+
+saccades <- ivt_results |>
+  filter(!map_lgl(ivt, is.null)) |>
+  mutate(saccades = map(ivt, "saccades")) |>
+  select(participant, trial, saccades) |>
+  unnest(saccades)
+
+fixations
+```
+
+## Merge fixations with behavioral
+
+Attach trial-level behavioral fields and stim attributes (background,
+object) to every fixation, then derive `emo` / `location` from the
+behavioral `Condition` column (e.g. `"neg-right"`). The stim-filename
+parse misfires on the `airport_a_n_r.jpeg` form (`"n"` / `"r"` instead of
+`"neg"` / `"right"`), so `Condition` is the source of truth.
+
+```{r merge-behavior}
+trial_info <- encoding |>
+  left_join(distinct(gaze_trial, participant, trial,
+                     stim, background, object),
+            by = c("participant", "trial")) |>
+  separate_wider_delim(
+    Condition, delim = "-",
+    names = c("emo", "location"),
+    cols_remove = FALSE
+  )
+
+fixations_behav <- fixations |>
+  left_join(trial_info, by = c("participant", "trial"))
+
+fixations_behav
+```
+
+## Label AOIs
+
+Tag every fixation as **Left**, **Right**, or **Outside** based on which
+half of the 700 × 550 picture box it falls in. The first summarise() is a
+sanity check on coordinate extents (should hug 0–1920 / 0–1080).
+`fix_summary` collapses to one row per (participant, trial, AOI) with
+fixation counts and total dwell time.
+
+```{r aoi-label}
+fixations_behav |>
+  summarise(
+    min_x = min(x, na.rm = TRUE),
+    max_x = max(x, na.rm = TRUE),
+    min_y = min(y, na.rm = TRUE),
+    max_y = max(y, na.rm = TRUE),
+    n_trials = n_distinct(trial)
+  )
+
+fix_labeled <- fixations_behav |>
+  mutate(
+    # Picture is 700x550 centered on 1920x1080 -> top-left at (610, 265).
+    x_pic = x - 610,
+    y_pic = y - 265,
+    AOI = case_when(
+      x_pic >= 0   & x_pic <  350 & y_pic >= 0 & y_pic <= 550 ~ "Left",
+      x_pic >= 350 & x_pic <= 700 & y_pic >= 0 & y_pic <= 550 ~ "Right",
+      TRUE ~ "Outside"
+    )
+  )
+
+fix_summary <- fix_labeled |>
+  filter(AOI != "Outside") |>
+  group_by(participant, trial, AOI, background, object, emo, location) |>
+  summarise(
+    mean_fix_duration = mean(duration, na.rm = TRUE),
+    n_fixations       = n(),
+    total_dwell_time  = sum(duration, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+## AOI overlay sanity check
+
+Plot the Left / Right AOI rectangles on top of an actual stimulus image to
+verify the bounds match where the L / R objects are drawn. Fixations from
+one trial are overlaid and colored by their assigned AOI — points should sit
+inside the same-colored rectangle.
+
+```{r aoi-overlay}
+library(jpeg)
+
+# Picture geometry (screen coords, y grows downward).
+pic_x_min <- 610;  pic_x_max <- 1310
+pic_y_min <- 265;  pic_y_max <- 815
+pic_x_mid <- (pic_x_min + pic_x_max) / 2  # 960 — Left/Right boundary
+flip_y    <- function(y) screen_h_px - y  # screen y → ggplot y-up
+
+# Pick a (participant, trial) whose stim image is on disk.
+image_dir   <- here("image")
+image_files <- list.files(image_dir)
+target_aoi  <- fix_labeled |>
+  filter(stim %in% image_files, AOI != "Outside") |>
+  slice(1)
+
+img       <- readJPEG(file.path(image_dir, target_aoi$stim))
+trial_fix <- fix_labeled |>
+  filter(participant == target_aoi$participant,
+         trial       == target_aoi$trial)
+
+ggplot() +
+  annotation_raster(img,
+                    xmin = pic_x_min, xmax = pic_x_max,
+                    ymin = flip_y(pic_y_max), ymax = flip_y(pic_y_min)) +
+  annotate("rect",
+           xmin = pic_x_min, xmax = pic_x_mid,
+           ymin = flip_y(pic_y_max), ymax = flip_y(pic_y_min),
+           fill = NA, color = "#1f77b4", linewidth = 1.2) +
+  annotate("rect",
+           xmin = pic_x_mid, xmax = pic_x_max,
+           ymin = flip_y(pic_y_max), ymax = flip_y(pic_y_min),
+           fill = NA, color = "#d62728", linewidth = 1.2) +
+  annotate("text",
+           x = (pic_x_min + pic_x_mid) / 2, y = flip_y(pic_y_min) + 20,
+           label = "Left",  color = "#1f77b4", fontface = "bold") +
+  annotate("text",
+           x = (pic_x_mid + pic_x_max) / 2, y = flip_y(pic_y_min) + 20,
+           label = "Right", color = "#d62728", fontface = "bold") +
+  geom_point(data = trial_fix,
+             aes(x = x, y = flip_y(y), color = AOI, size = duration),
+             alpha = 0.7) +
+  scale_color_manual(values = c(Left = "#1f77b4", Right = "#d62728",
+                                Outside = "gray50")) +
+  scale_size_continuous(range = c(2, 8), guide = "none") +
+  coord_fixed(xlim = c(0, screen_w_px), ylim = c(0, screen_h_px)) +
+  labs(
+    title    = paste0(target_aoi$participant, " — trial ", target_aoi$trial),
+    subtitle = target_aoi$stim,
+    x = "screen x (px)", y = "screen y, flipped (px)"
+  ) +
+  theme_minimal()
+```
+
+## All participants on the same stimulus
+
+Fixations on a single stim from every participant who saw it, faceted.
+The stim is whichever image is on disk in `image/` — only participants
+with a trial for that stim will appear.
+
+```{r aoi-all-participants}
+shared_stim <- list.files(image_dir)[1]
+img_shared  <- readJPEG(file.path(image_dir, shared_stim))
+
+shared_fix <- fix_labeled |>
+  filter(stim == shared_stim)
+
+ggplot(shared_fix, aes(x = x, y = flip_y(y),
+                       color = participant, size = duration)) +
+  annotation_raster(img_shared,
+                    xmin = pic_x_min, xmax = pic_x_max,
+                    ymin = flip_y(pic_y_max), ymax = flip_y(pic_y_min)) +
+  annotate("rect",
+           xmin = pic_x_min, xmax = pic_x_mid,
+           ymin = flip_y(pic_y_max), ymax = flip_y(pic_y_min),
+           fill = NA, color = "white", linewidth = 1) +
+  annotate("rect",
+           xmin = pic_x_mid, xmax = pic_x_max,
+           ymin = flip_y(pic_y_max), ymax = flip_y(pic_y_min),
+           fill = NA, color = "white", linewidth = 1) +
+  geom_point(alpha = 0.75) +
+  scale_size_continuous(range = c(2, 8), guide = "none") +
+  coord_fixed(xlim = c(0, screen_w_px), ylim = c(0, screen_h_px)) +
+  labs(
+    title    = "Fixations across participants",
+    subtitle = shared_stim,
+    color    = "Participant",
+    x = "screen x (px)", y = "screen y, flipped (px)"
+  ) +
+  theme_minimal()
+```
+
+## Animated scanpath on stimulus image
+
+Plot fixations from a single trial overlaid on the actual stimulus image.
+The picture is 700x550 centered on a 1920x1080 screen, so its bounding box
+in screen pixels is x: 610-1310, y: 265-815. `kollaR::animated_fixation_plot()`
+needs the gaze data with `onset`/`offset` columns (already in ms relative to
+the onset of the trial) and a `background.images` table with absolute pixel
+bounds.
+
+```{r animated-plot, eval=FALSE}
+# Pick a (participant, trial) whose stim image we actually have on disk.
+image_dir <- here("image")
+target <- fix_labeled |>
+  filter(stim %in% list.files(image_dir)) |>
+  slice(1)
+
+target_pid   <- target$participant
+target_trial <- target$trial
+trial_stim_name <- target$stim
+
+background.images <- data.frame(
+  path    = file.path(image_dir, trial_stim_name),
+  min.x   = 610,
+  min.y   = 265,
+  max.x   = 1310,
+  max.y   = 815,
+  onset   = 0,
+  offset  = 6000   # picture shown for ~5.2 s; pad a bit
+)
+
+trial_fixations <- fix_labeled |>
+  filter(participant == target_pid, trial == target_trial) |>
+  select(x, y, onset, offset, duration)
+
+animated_fixation_plot(
+  trial_fixations,
+  xres                = 1920,
+  yres                = 1080,
+  plot.onset          = 0,
+  plot.offset         = 6000,
+  background.images   = background.images,
+  save.gif            = FALSE,
+  n.loops             = 0,
+  resolution.scaling  = 0.5,
+  gif.dpi             = 150,
+  show.progress       = FALSE
+)
+```
+
+## Object-side dwell by emotion
+
+Per-trial dwell on the object side vs. background side, split by emotion.
+`on_object` is TRUE when the AOI matches the cued `location`.
+
+```{r aoi-summary}
+emo_dwell <- fix_labeled |>
+  filter(AOI != "Outside") |>
+  mutate(on_object = AOI == str_to_title(location)) |>
+  group_by(participant, emo, on_object) |>
+  summarise(
+    n_fix       = n(),
+    total_dwell = sum(duration, na.rm = TRUE),
+    mean_dur    = mean(duration, na.rm = TRUE),
+    .groups     = "drop_last"
+  ) |>
+  mutate(prop_dwell = total_dwell / sum(total_dwell)) |>
+  ungroup()
+
+emo_dwell
+```
+
+## Encoding fixations by emo × location
+
+Break encoding fixations into the four cells of interest — **neg-left,
+neg-right, neu-left, neu-right** — at the participant level. Counts and
+durations are averaged across trials within each cell.
+
+```{r encoding-emo-loc}
+encoding_fix_by_emoloc <- fix_labeled |>
+  group_by(participant, trial, emo, location) |>
+  summarise(
+    n_fixations       = n(),
+    mean_fix_duration = mean(duration, na.rm = TRUE),
+    total_dwell_time  = sum(duration,  na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  group_by(participant, emo, location) |>
+  summarise(
+    n_trials              = n(),
+    mean_n_fixations      = mean(n_fixations,       na.rm = TRUE),
+    mean_fix_duration     = mean(mean_fix_duration, na.rm = TRUE),
+    mean_total_dwell_time = mean(total_dwell_time,  na.rm = TRUE),
+    .groups = "drop"
+  )
+
+encoding_fix_by_emoloc
+```
+
+# Recognition
+
+Mirrors the encoding pipeline against the `recognition_*` folders. The
+behavioral table keeps `Background`, `Composite`, `Object`, `Condition`,
+`stimulus_status`, `cb`, `response`, and `accuracy`.
+
+## Behavioral
+
+```{r recognition-behavioral}
+recognition_behavioral_files <- list.files(
+  recognition_behavioral_dir, pattern = "\\.csv$", full.names = TRUE
+)
+
+recognition <- map(recognition_behavioral_files, read_recognition_behavioral) |>
+  list_rbind()
+
+recognition
+```
+
+## Recognition accuracy
+
+Per-participant hit rate, false-alarm rate, overall accuracy, d-prime, and
+criterion. Pass `groupvars = c("participant", "Condition")` to break it down
+by encoding condition.
+
+```{r recognition-accuracy}
+recognition_acc <- recognition_accuracy(recognition)
+recognition_acc
+
+recognition_acc_by_condition <- recognition_accuracy(
+  recognition, groupvars = c("participant", "Condition")
+)
+recognition_acc_by_condition
+```
+
+## Picture-presentation duration check
+
+Each background-task pic should be displayed for ~5 s. Compute
+`back.stopped - back.started` per trial and flag rows where PsychoPy wrote
+non-numeric junk (e.g. `[np.float64(...)]` array literals).
+
+```{r recognition-duration}
+recognition_durations <- map(recognition_behavioral_files, function(p) {
+  read_csv(p, show_col_types = FALSE) |>
+    filter(!is.na(back.started)) |>
+    slice_head(n = 90) |>
+    transmute(
+      participant   = extract_pid(p),
+      trial         = row_number(),
+      back_started  = suppressWarnings(as.numeric(back.started)),
+      back_stopped  = suppressWarnings(as.numeric(back.stopped)),
+      back_duration = back_stopped - back_started,
+      corrupt       = is.na(back_started) | is.na(back_stopped)
+    )
+}) |> list_rbind()
+
+recognition_duration_summary <- recognition_durations |>
+  group_by(participant) |>
+  summarise(
+    n          = n(),
+    n_corrupt  = sum(corrupt),
+    min_dur    = min(back_duration, na.rm = TRUE),
+    median_dur = median(back_duration, na.rm = TRUE),
+    max_dur    = max(back_duration, na.rm = TRUE),
+    mean_dur   = mean(back_duration, na.rm = TRUE),
+    n_off_5s   = sum(abs(back_duration - 5) > 0.05, na.rm = TRUE),
+    .groups    = "drop"
+  )
+
+recognition_duration_summary
+```
+
+## Eye-tracking data
+
+```{r recognition-load-et}
+recognition_gaze_files <- list.files(
+  recognition_gaze_dir, pattern = "_gaze\\.csv$", full.names = TRUE
+)
+recognition_msg_files <- list.files(
+  recognition_msg_dir,  pattern = "_msg\\.csv$",  full.names = TRUE
+)
+
+recognition_gaze <- map(recognition_gaze_files, read_gaze) |> list_rbind()
+recognition_msg  <- map(recognition_msg_files,  read_msg)  |> list_rbind()
+```
+
+### Calibration validation
+
+Same parse as the encoding `validation` table but for the recognition
+session. Useful for spotting sessions whose data quality drifted between
+phases.
+
+```{r recognition-validation}
+recognition_validation <- parse_validation(recognition_msg)
+recognition_validation
+```
+
+### Trial events
+
+```{r recognition-msg-events}
+recognition_msg_events <- recognition_msg |>
+  filter(str_detect(msg, "^(onset|offset)_")) |>
+  mutate(
+    event = str_extract(msg, "^(onset|offset)"),
+    stim  = str_remove(msg, "^(onset|offset)_")
+  ) |>
+  select(participant, system_time_stamp, msg, event, stim)
+
+recognition_msg_events
+```
+
+Recognition stim names aren't decomposed into background/object/emo/location
+the way encoding stim names are — recognition typically shows a composite,
+so we keep `stim` as one column. Adjust if your recognition filenames follow
+a parseable schema.
+
+```{r recognition-merge-et}
+recognition_trial_stim <- recognition_msg_events |>
+  filter(event == "onset") |>
+  group_by(participant) |>
+  arrange(system_time_stamp, .by_group = TRUE) |>
+  mutate(trial = row_number()) |>
+  ungroup() |>
+  select(participant, trial, stim)
+
+recognition_gaze_trial <- bind_rows(recognition_gaze, recognition_msg_events) |>
+  group_by(participant) |>
+  arrange(system_time_stamp, .by_group = TRUE) |>
+  mutate(
+    is_onset      = !is.na(event) & event == "onset",
+    is_offset     = !is.na(event) & event == "offset",
+    onset_run     = cumsum(is_onset),
+    offset_before = lag(cumsum(is_offset), default = 0),
+    in_trial      = onset_run > offset_before,
+    trial         = if_else(in_trial, onset_run, NA_integer_),
+    time_ms       = system_time_stamp / 1000
+  ) |>
+  ungroup() |>
+  select(-stim) |>
+  left_join(recognition_trial_stim, by = c("participant", "trial")) |>
+  filter(!is.na(trial)) |>
+  group_by(participant, trial) |>
+  mutate(time_ms = time_ms - time_ms[event == "onset" & !is.na(event)][1]) |>
+  ungroup() |>
+  select(
+    participant,
+    trial,
+    time_ms,
+    msg,
+    event,
+    stim,
+    left_x_px, left_y_px,
+    right_x_px, right_y_px,
+    avg_x_px, avg_y_px
+  )
+
+recognition_gaze_trial
+```
+
+Sanity check: every onset has a matching offset per participant, and no
+onset/offset msg row was dropped during the merge.
+
+```{r recognition-merge-et-check}
+recognition_msg_balance <- recognition_msg_events |>
+  group_by(participant) |>
+  summarise(
+    n_onset  = sum(event == "onset"),
+    n_offset = sum(event == "offset"),
+    balanced = n_onset == n_offset,
+    .groups  = "drop"
+  )
+
+stopifnot(all(recognition_msg_balance$balanced))
+stopifnot(
+  nrow(filter(recognition_gaze_trial, !is.na(event))) ==
+    nrow(recognition_msg_events)
+)
+
+recognition_msg_balance
+```
+
+## Preprocess + I-VT
+
+Same recipe as the encoding pipeline: downsample to a uniform 120 Hz,
+interpolate short gaps with `kollaR::preprocess_gaze()`, then run I-VT
+fixation detection per (participant, trial) wrapped in `possibly()` so a
+single tracker-dropout trial doesn't kill the map.
+
+```{r recognition-preprocess}
+recognition_gaze_120hz <- recognition_gaze_trial |>
+  filter(is.na(event)) |>
+  rename(timestamp = time_ms) |>
+  downsample_gaze(bin.length = 1000 / 120) |>
+  rename(timestamp = time_bin)
+
+recognition_gaze_pp <- recognition_gaze_120hz |>
+  group_by(participant, trial) |>
+  group_modify(~ preprocess_gaze(
+    .x,
+    xcol = "avg_x_px",
+    ycol = "avg_y_px"
+  )) |>
+  ungroup()
+
+recognition_gaze_pp
+```
+
+```{r recognition-ivt}
+# Wrap algorithm_ivt() so trials with no valid samples return NULL instead
+# of throwing. Without this, one bad trial (e.g. tracker dropout the entire
+# 5 s window) kills the whole map().
+safe_ivt <- possibly(
+  function(d) algorithm_ivt(
+    d,
+    xcol                   = "avg_x_px",
+    ycol                   = "avg_y_px",
+    velocity.filter.ms     = 20,
+    velocity.threshold     = 30,
+    min.fixation.duration  = 60,
+    merge.ms.threshold     = 75,
+    distance.threshold     = 0.5,
+    one_degree             = 40
+  ),
+  otherwise = NULL
+)
+
+recognition_ivt_results <- recognition_gaze_pp |>
+  nest(.by = c(participant, trial)) |>
+  mutate(ivt = map(data, safe_ivt))
+
+# Trials that failed I-VT (all-NA samples or too-short data).
+recognition_ivt_failed <- recognition_ivt_results |>
+  filter(map_lgl(ivt, is.null)) |>
+  select(participant, trial)
+
+recognition_ivt_failed
+
+recognition_fixations <- recognition_ivt_results |>
+  filter(!map_lgl(ivt, is.null)) |>
+  mutate(fixations = map(ivt, "fixations")) |>
+  select(participant, trial, fixations) |>
+  unnest(fixations)
+
+recognition_saccades <- recognition_ivt_results |>
+  filter(!map_lgl(ivt, is.null)) |>
+  mutate(saccades = map(ivt, "saccades")) |>
+  select(participant, trial, saccades) |>
+  unnest(saccades)
+
+recognition_fixations
+```
+
+## Merge fixations with behavioral
+
+Attach the recognition behavioral fields (Background, Composite, Condition,
+stimulus_status, response, accuracy) to every fixation by joining on
+`(participant, trial)`.
+
+```{r recognition-merge-behavior}
+recognition_trial_info <- recognition |>
+  left_join(distinct(recognition_gaze_trial, participant, trial, stim),
+            by = c("participant", "trial"))
+
+recognition_fixations_behav <- recognition_fixations |>
+  left_join(recognition_trial_info, by = c("participant", "trial"))
+
+recognition_fixations_behav
+```
+
+## Label recognition AOIs
+
+Same picture geometry as encoding (700 × 550 box, split at x = 960), so
+each recognition fixation is tagged **Left**, **Right**, or **Outside**.
+At recognition we don't know which side the *originally encoded* object
+sat on, but the spatial split is still meaningful for asking where the
+gaze went — and it can be cross-referenced with the encoded `location`
+via Background.
+
+```{r recognition-aoi-label}
+recognition_fix_labeled <- recognition_fixations_behav |>
+  mutate(
+    x_pic = x - pic_x_min,
+    y_pic = y - pic_y_min,
+    AOI = case_when(
+      x_pic >= 0   & x_pic <  350 & y_pic >= 0 & y_pic <= 550 ~ "Left",
+      x_pic >= 350 & x_pic <= 700 & y_pic >= 0 & y_pic <= 550 ~ "Right",
+      TRUE ~ "Outside"
+    )
+  )
+
+recognition_fix_labeled |> count(AOI)
+```
+
+## Recognition fixation summary
+
+Per-trial fixation count and mean fixation duration broken down by AOI,
+restricted to **correctly recognized old items**
+(`stimulus_status == "old"` & `accuracy == 1`) — same filter the eyesim
+pipeline uses, so analyses are scoped to the same trials. Outside-the-box
+fixations are dropped before summarising.
+
+```{r recognition-fix-summary}
+recognition_fix_summary <- recognition_fix_labeled |>
+  filter(stimulus_status == "old", accuracy == 1, AOI != "Outside") |>
+  group_by(participant, trial, Background, Condition, AOI) |>
+  summarise(
+    n_fixations       = n(),
+    mean_fix_duration = mean(duration, na.rm = TRUE),
+    total_dwell_time  = sum(duration,  na.rm = TRUE),
+    .groups = "drop"
+  )
+
+recognition_fix_summary
+```
+
+Roll the per-trial table up to one row per (participant × Condition × AOI)
+— the table to feed into participant-level stats.
+
+```{r recognition-fix-by-condition}
+recognition_fix_by_condition <- recognition_fix_summary |>
+  group_by(Condition, AOI) |>
+  summarise(
+    n_trials              = n(),
+    mean_n_fixations      = mean(n_fixations,       na.rm = TRUE),
+    mean_fix_duration     = mean(mean_fix_duration, na.rm = TRUE),
+    mean_total_dwell_time = mean(total_dwell_time,  na.rm = TRUE),
+    .groups = "drop"
+  )
+
+recognition_fix_by_condition
+```
+
+## Encoding + recognition fixations (long format)
+
+Stack encoding and recognition fixations into one long frame keyed on
+`(participant, Background)`, with `phase` distinguishing the two. Recognition
+fixations are pre-filtered to `stimulus_status == "old"` and `accuracy == 1`
+so only correctly recognized old items remain — accuracy/status columns are
+dropped after filtering. Restricted to Backgrounds that appear in *both*
+phases per participant (so every Background here has paired data).
+
+```{r merge-recognition-encoding}
+encoding_long <- fixations_behav |>
+  select(participant, Background, Condition, List, phase,
+         x, y, duration, onset)
+
+recognition_long <- recognition_fixations_behav |>
+  filter(stimulus_status == "old", accuracy == 1) |>
+  select(participant, Background, Condition, List, phase,
+         x, y, duration, onset)
+
+paired_keys <- inner_join(
+  distinct(encoding_long,    participant, Background),
+  distinct(recognition_long, participant, Background),
+  by = c("participant", "Background")
+)
+
+fixations_long <- bind_rows(encoding_long, recognition_long) |>
+  semi_join(paired_keys, by = c("participant", "Background")) |>
+  arrange(participant, Background, phase, onset)
+
+fixations_long
+```
+
+## Gaze reinstatement (eyesim)
+
+Use `eyesim` to test whether the recognition-phase fixation pattern
+reinstates the encoding-phase pattern for the same `Background` *within
+participant*. Workflow follows the package vignette:
+
+1. Wrap `fixations_long` in `eye_table()` keyed on participant + phase +
+   Background.
+2. Build a fixation-density map per group with `density_by()`.
+3. Run `template_similarity()` with the encoding densities as the reference
+   and the recognition densities as the source. We match on a composite
+   `pair_id = participant::Background` so each recognition map is compared
+   to the *same participant's* encoding map for the *same* Background, and
+   permute within participant for the null distribution.
+
+Restrict to fixations that landed on the picture itself
+(x: 610–1310, y: 265–815) — fixations on the surrounding gray screen are
+dropped before density estimation. Coordinates stay in absolute screen
+pixels so the density maps live in the same space as the raw fixations
+and the AOI rectangles.
+
+```{r eyesim-setup}
+# install if needed:
+# remotes::install_github("bbuchsbaum/eyesim")
+library(eyesim)
+
+fixations_long_eye <- fixations_long |>
+  mutate(pair_id = paste(Background, Condition, sep = "::"))
+
+eyetab <- eye_table(
+  x = "x", y = "y",
+  duration = "duration", onset = "onset",
+  groupvar = c("participant", "phase", "Background", "Condition", "pair_id"),
+  data    = fixations_long_eye,
+  clip_bounds     = c(pic_x_min, pic_x_max, pic_y_min, pic_y_max),
+  relative_coords = TRUE
+)
+
+eyetab
+```
+
+Build a fixation-density map per (participant, phase, Background) by
+smoothing the (now picture-only) fixations with a Gaussian
+(`sigma = 80 px` ≈ 2°) across the picture box. These per-group maps are
+what `template_similarity()` compares.
+
+```{r eyesim-density}
+eyedens <- density_by(
+  eyetab,
+  groups  = c("participant", "phase", "Background", "Condition", "pair_id"),
+  sigma   = 80,
+  xbounds = c(pic_x_min, pic_x_max),
+  ybounds = c(pic_y_min, pic_y_max)
+)
+
+eyedens
+```
+
+Compute reinstatement: for each (participant, Background) compare the
+recognition density map to the encoding density map for the same
+participant + Background, and benchmark against a within-participant
+permutation null. `eye_sim_diff` is the observed-minus-permuted similarity
+in Fisher-z space — that's the per-pair effect.
+
+```{r eyesim-reinstatement}
+enc_dens <- eyedens |> filter(phase == "encoding")
+rec_dens <- eyedens |> filter(phase == "recognition")
+
+set.seed(1234)
+reinstatement <- template_similarity(
+  ref_tab      = enc_dens,
+  source_tab   = rec_dens,
+  match_on     = "pair_id",   
+  permute_on = "participant", # match recognition→encoding for same pid+bg
+  method       = "spearman",
+  permutations = 1000
+)
+
+reinstatement
+```
+
+```{r eyesim-summary}
+# Mean reinstatement (Fisher-z corrected against the within-participant null)
+# overall and by Condition.
+reinstatement |>
+  summarise(
+    mean_eye_sim      = mean(eye_sim,      na.rm = TRUE),
+    mean_perm_sim     = mean(perm_sim,     na.rm = TRUE),
+    mean_eye_sim_diff = mean(eye_sim_diff, na.rm = TRUE),
+    n_pairs           = n()
+  )
+
+reinstatement |>
+  group_by(Condition) |>
+  summarise(
+    mean_eye_sim_diff = mean(eye_sim_diff, na.rm = TRUE),
+    sd_eye_sim_diff   = sd(eye_sim_diff,   na.rm = TRUE),
+    n_pairs           = n(),
+    .groups = "drop"
+  )
+```
+
+# Write outputs
+
+Persist the summary tables to `output/<group>/` as CSVs so they can be
+shared, version-controlled, or fed into downstream stats scripts. All
+filenames are prefixed with `group_label` (`TD`/`DS`) to keep groups
+separate.
+
+| file | what it is |
+|---|---|
+| `encoding_behavioral.csv` | per-trial encoding behavioral table |
+| `recognition_behavioral.csv` | per-trial recognition behavioral table |
+| `recognition_accuracy.csv` | HR / FAR / accuracy / d′ / c per participant |
+| `recognition_accuracy_by_condition.csv` | same broken down by Condition |
+| `recognition_duration_summary.csv` | back-task picture-display duration QC |
+| `validation_encoding.csv`, `validation_recognition.csv` | calibration metrics per validation block |
+| `fixations_encoding.csv`, `fixations_recognition.csv` | I-VT fixation events |
+| `fixation_aoi_summary_encoding.csv` | per (participant, trial, AOI) dwell |
+| `fixation_summary_recognition.csv` | per-trial recognition fixation count + mean duration, by AOI (old + correct) |
+| `fixation_summary_recognition_by_condition.csv` | participant × Condition × AOI rollup of the above |
+| `emo_dwell_encoding.csv` | object-side dwell × emotion |
+| `reinstatement.csv` | per-pair encoding↔recognition similarity |
+| `reinstatement_by_condition.csv` | reinstatement summary × Condition |
+
+```{r write-outputs}
+out <- function(name) file.path(output_dir, paste0(group_label, "_", name))
+
+# Behavioral
+write_csv(encoding,    out("encoding_behavioral.csv"))
+write_csv(recognition, out("recognition_behavioral.csv"))
+
+# Recognition stats
+write_csv(recognition_acc,              out("recognition_accuracy.csv"))
+write_csv(recognition_acc_by_condition, out("recognition_accuracy_by_condition.csv"))
+write_csv(recognition_duration_summary, out("recognition_duration_summary.csv"))
+
+# Eye-tracking quality + events
+write_csv(validation,             out("validation_encoding.csv"))
+write_csv(recognition_validation, out("validation_recognition.csv"))
+
+# Fixations
+write_csv(fixations_behav,             out("fixations_encoding.csv"))
+write_csv(recognition_fixations_behav, out("fixations_recognition.csv"))
+write_csv(fix_summary,             out("fixation_aoi_summary_encoding.csv"))
+write_csv(recognition_fix_summary,       out("fixation_summary_recognition.csv"))
+write_csv(recognition_fix_by_condition,  out("fixation_summary_recognition_by_condition.csv"))
+write_csv(emo_dwell,               out("emo_dwell_encoding.csv"))
+
+# Gaze reinstatement
+write_csv(reinstatement, out("reinstatement.csv"))
+
+reinstatement_by_condition <- reinstatement |>
+  group_by(Condition) |>
+  summarise(
+    mean_eye_sim      = mean(eye_sim,      na.rm = TRUE),
+    mean_perm_sim     = mean(perm_sim,     na.rm = TRUE),
+    mean_eye_sim_diff = mean(eye_sim_diff, na.rm = TRUE),
+    sd_eye_sim_diff   = sd(eye_sim_diff,   na.rm = TRUE),
+    n_pairs           = n(),
+    .groups = "drop"
+  )
+write_csv(reinstatement_by_condition, out("reinstatement_by_condition.csv"))
+
+list.files(output_dir)
+```

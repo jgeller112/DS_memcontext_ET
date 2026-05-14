@@ -1,0 +1,28 @@
+# Participant data & study outputs
+Data/
+output/
+
+# R session/project files
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+.Rcheck/
+*.Rproj.bak
+
+# Quarto / knitr render artifacts
+*_files/
+*_cache/
+/_site/
+/_freeze/
+encoding_behavioral.html
+
+# OS
+.DS_Store
+Thumbs.db
+
+# shinyapps.io deploy metadata (contains tokens)
+rsconnect/
+
+# Claude Code local IDE state
+.claude/
