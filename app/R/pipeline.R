@@ -191,9 +191,50 @@ build_trial_stim_recognition <- function(msg_events) {
     select(participant, trial, stim)
 }
 
+# Per-participant nearest-sample as-of merge: attach each message to the
+# gaze sample whose system_time_stamp is closest. Vectorized via
+# findInterval; no event-only rows are introduced. Adds `match_offset_us`
+# (matched sample ts − msg ts) so you can see how far each message slid.
+nearest_msg_to_gaze <- function(gaze, msg_events) {
+  if (nrow(gaze) == 0) return(gaze)
+  gaze <- gaze |> arrange(system_time_stamp)
+  if (nrow(msg_events) == 0) {
+    return(gaze |>
+             mutate(msg = NA_character_, event = NA_character_,
+                    stim = NA_character_, match_offset_us = NA_real_))
+  }
+  msg_events <- msg_events |> arrange(system_time_stamp)
+  sample_ts  <- gaze$system_time_stamp
+  idx_lo     <- findInterval(msg_events$system_time_stamp, sample_ts)
+  idx_lo[idx_lo == 0L] <- 1L
+  idx_hi     <- pmin(idx_lo + 1L, length(sample_ts))
+  d_lo       <- abs(sample_ts[idx_lo] - msg_events$system_time_stamp)
+  d_hi       <- abs(sample_ts[idx_hi] - msg_events$system_time_stamp)
+  nearest    <- ifelse(d_hi < d_lo, idx_hi, idx_lo)
+
+  msg_matched <- msg_events |>
+    mutate(matched_ts      = sample_ts[nearest],
+           match_offset_us = sample_ts[nearest] - system_time_stamp) |>
+    group_by(matched_ts) |>
+    slice_min(abs(match_offset_us), n = 1, with_ties = FALSE) |>
+    ungroup() |>
+    select(matched_ts, msg, event, stim, match_offset_us)
+
+  gaze |>
+    left_join(msg_matched, by = c("system_time_stamp" = "matched_ts"))
+}
+
 assign_gaze_to_trials <- function(gaze, msg_events, trial_stim,
                                   decompose_stim = TRUE) {
-  joined <- bind_rows(gaze, msg_events) |>
+  # Run the nearest-sample merge per participant — you can't match a
+  # message in subject A against a gaze sample in subject B.
+  joined <- gaze |>
+    group_by(participant) |>
+    group_modify(~ nearest_msg_to_gaze(
+      .x,
+      filter(msg_events, participant == .y$participant)
+    )) |>
+    ungroup() |>
     group_by(participant) |>
     arrange(system_time_stamp, .by_group = TRUE) |>
     mutate(
@@ -202,26 +243,26 @@ assign_gaze_to_trials <- function(gaze, msg_events, trial_stim,
       onset_run     = cumsum(is_onset),
       offset_before = lag(cumsum(is_offset), default = 0),
       in_trial      = onset_run > offset_before,
-      trial         = if_else(in_trial, onset_run, NA_integer_),
-      time_ms       = system_time_stamp / 1000
+      trial         = if_else(in_trial, onset_run, NA_integer_)
     ) |>
     ungroup() |>
     select(-stim) |>
     left_join(trial_stim, by = c("participant", "trial")) |>
     filter(!is.na(trial)) |>
     group_by(participant, trial) |>
-    mutate(time_ms = time_ms - time_ms[event == "onset" & !is.na(event)][1]) |>
+    mutate(time_ms = time_ms - min(time_ms)) |>
     ungroup()
 
   if (decompose_stim) {
     joined |>
-      select(participant, trial, time_ms, msg, event,
+      select(participant, trial, time_ms, msg, event, match_offset_us,
              stim, background, object, emo, location,
              left_x_px, left_y_px, right_x_px, right_y_px,
              avg_x_px, avg_y_px)
   } else {
     joined |>
-      select(participant, trial, time_ms, msg, event, stim,
+      select(participant, trial, time_ms, msg, event, match_offset_us,
+             stim,
              left_x_px, left_y_px, right_x_px, right_y_px,
              avg_x_px, avg_y_px)
   }
@@ -291,8 +332,10 @@ preprocess_120hz <- function(gaze_trial) {
   if (!requireNamespace("kollaR", quietly = TRUE)) {
     stop("kollaR is not installed.")
   }
+  # With the nearest-sample merge in assign_gaze_to_trials(), every row in
+  # gaze_trial is a real gaze sample (event info, if any, is merged onto
+  # the sample). No need to filter out event rows — they don't exist.
   gaze_120hz <- gaze_trial |>
-    filter(is.na(event)) |>
     rename(timestamp = time_ms) |>
     downsample_gaze(bin.length = 1000 / 120) |>
     rename(timestamp = time_bin)

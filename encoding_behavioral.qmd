@@ -256,6 +256,40 @@ parse_validation <- function(msg_df) {
     select(participant, system_time_stamp,
            Dev_L, Dev_R, RMS_L, RMS_R, LOSS_L, LOSS_R, SD_L, SD_R)
 }
+
+# Per-participant nearest-sample as-of merge: attach each message to the
+# gaze sample whose system_time_stamp is closest. Vectorized via
+# findInterval; no event-only rows are introduced. Used below for both the
+# encoding and recognition gaze pipelines. Adds `match_offset_us` so you
+# can see how far each message slid (median ~2 ms at 30 Hz).
+nearest_msg_to_gaze <- function(gaze, msg_events) {
+  if (nrow(gaze) == 0) return(gaze)
+  gaze <- gaze |> arrange(system_time_stamp)
+  if (nrow(msg_events) == 0) {
+    return(gaze |>
+             mutate(msg = NA_character_, event = NA_character_,
+                    stim = NA_character_, match_offset_us = NA_real_))
+  }
+  msg_events <- msg_events |> arrange(system_time_stamp)
+  sample_ts  <- gaze$system_time_stamp
+  idx_lo     <- findInterval(msg_events$system_time_stamp, sample_ts)
+  idx_lo[idx_lo == 0L] <- 1L
+  idx_hi     <- pmin(idx_lo + 1L, length(sample_ts))
+  d_lo       <- abs(sample_ts[idx_lo] - msg_events$system_time_stamp)
+  d_hi       <- abs(sample_ts[idx_hi] - msg_events$system_time_stamp)
+  nearest    <- ifelse(d_hi < d_lo, idx_hi, idx_lo)
+
+  msg_matched <- msg_events |>
+    mutate(matched_ts      = sample_ts[nearest],
+           match_offset_us = sample_ts[nearest] - system_time_stamp) |>
+    group_by(matched_ts) |>
+    slice_min(abs(match_offset_us), n = 1, with_ties = FALSE) |>
+    ungroup() |>
+    select(matched_ts, msg, event, stim, match_offset_us)
+
+  gaze |>
+    left_join(msg_matched, by = c("system_time_stamp" = "matched_ts"))
+}
 ```
 
 # Encoding
@@ -348,7 +382,16 @@ trial_stim <- msg_events |>
   ) |>
   select(participant, trial, stim, background, object, emo, location)
 
-gaze_trial <- bind_rows(gaze, msg_events) |>
+# Nearest-sample as-of merge per participant: each onset/offset message
+# gets attached to the gaze sample whose timestamp is closest. The output
+# has one row per gaze sample (no synthetic event rows), with msg / event /
+# stim sparsely set on the samples that absorbed a message.
+gaze_trial <- gaze |>
+  group_by(participant) |>
+  group_modify(~ nearest_msg_to_gaze(
+    .x, filter(msg_events, participant == .y$participant)
+  )) |>
+  ungroup() |>
   group_by(participant) |>
   arrange(system_time_stamp, .by_group = TRUE) |>
   mutate(
@@ -359,15 +402,14 @@ gaze_trial <- bind_rows(gaze, msg_events) |>
     # itself still belongs to the trial it closes.
     offset_before = lag(cumsum(is_offset), default = 0),
     in_trial      = onset_run > offset_before,
-    trial         = if_else(in_trial, onset_run, NA_integer_),
-    time_ms       = system_time_stamp / 1000
+    trial         = if_else(in_trial, onset_run, NA_integer_)
   ) |>
   ungroup() |>
   select(-stim) |>
   left_join(trial_stim, by = c("participant", "trial")) |>
   filter(!is.na(trial)) |>
   group_by(participant, trial) |>
-  mutate(time_ms = time_ms - time_ms[event == "onset" & !is.na(event)][1]) |>
+  mutate(time_ms = time_ms - min(time_ms)) |>
   ungroup() |>
   select(
     participant,
@@ -375,6 +417,7 @@ gaze_trial <- bind_rows(gaze, msg_events) |>
     time_ms,
     msg,
     event,
+    match_offset_us,
     stim,
     background, object, emo, location,
     left_x_px, left_y_px,
@@ -412,8 +455,9 @@ msg_balance
 `kollaR::preprocess_gaze()` interpolates short gaps and applies a moving-mean
 filter, but it expects continuous samples within a single trial — so apply
 it per (participant, trial) via `group_modify()`. It also requires a column
-literally named `timestamp` (in ms) and will choke on the interleaved msg
-rows, so drop those first.
+literally named `timestamp` (in ms). The nearest-sample merge above means
+every row in `gaze_trial` is already a real sample (events are merged onto
+samples, not extra rows), so we can downsample directly.
 
 ```{r preprocess}
 library(kollaR)
@@ -421,7 +465,6 @@ library(kollaR)
 # Downsample to a uniform 120 Hz first so I-VT velocities are computed
 # against a known sample rate (Tobii samples can drop, leaving gaps).
 gaze_120hz <- gaze_trial |>
-  filter(is.na(event)) |>                # drop onset/offset rows
   rename(timestamp = time_ms) |>
   downsample_gaze(bin.length = 1000 / 120) |>
   rename(timestamp = time_bin)
@@ -882,7 +925,13 @@ recognition_trial_stim <- recognition_msg_events |>
   ungroup() |>
   select(participant, trial, stim)
 
-recognition_gaze_trial <- bind_rows(recognition_gaze, recognition_msg_events) |>
+# Nearest-sample as-of merge per participant (same approach as encoding).
+recognition_gaze_trial <- recognition_gaze |>
+  group_by(participant) |>
+  group_modify(~ nearest_msg_to_gaze(
+    .x, filter(recognition_msg_events, participant == .y$participant)
+  )) |>
+  ungroup() |>
   group_by(participant) |>
   arrange(system_time_stamp, .by_group = TRUE) |>
   mutate(
@@ -891,15 +940,14 @@ recognition_gaze_trial <- bind_rows(recognition_gaze, recognition_msg_events) |>
     onset_run     = cumsum(is_onset),
     offset_before = lag(cumsum(is_offset), default = 0),
     in_trial      = onset_run > offset_before,
-    trial         = if_else(in_trial, onset_run, NA_integer_),
-    time_ms       = system_time_stamp / 1000
+    trial         = if_else(in_trial, onset_run, NA_integer_)
   ) |>
   ungroup() |>
   select(-stim) |>
   left_join(recognition_trial_stim, by = c("participant", "trial")) |>
   filter(!is.na(trial)) |>
   group_by(participant, trial) |>
-  mutate(time_ms = time_ms - time_ms[event == "onset" & !is.na(event)][1]) |>
+  mutate(time_ms = time_ms - min(time_ms)) |>
   ungroup() |>
   select(
     participant,
@@ -907,6 +955,7 @@ recognition_gaze_trial <- bind_rows(recognition_gaze, recognition_msg_events) |>
     time_ms,
     msg,
     event,
+    match_offset_us,
     stim,
     left_x_px, left_y_px,
     right_x_px, right_y_px,
@@ -947,7 +996,6 @@ single tracker-dropout trial doesn't kill the map.
 
 ```{r recognition-preprocess}
 recognition_gaze_120hz <- recognition_gaze_trial |>
-  filter(is.na(event)) |>
   rename(timestamp = time_ms) |>
   downsample_gaze(bin.length = 1000 / 120) |>
   rename(timestamp = time_bin)
