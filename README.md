@@ -5,10 +5,7 @@ End-to-end pipeline for the DS memory-context eye-tracking study. Two groups
 (**encoding** + **recognition**), with PsychoPy behavioral CSVs and Tobii
 gaze + msg CSVs.
 
-**Live app — [DS-Mem-Emo](https://connect.posit.cloud/jgeller112/DS-Mem-Emo)**
-*(replace this URL with the actual deployed link once Posit Connect Cloud
-gives you one — the format is `https://connect.posit.cloud/content/<id>` or
-`https://<your-id>.shinyapps.io/ds-mem-emo/` depending on the host)*
+**Live app — [DS-Mem-Emo](https://connect.posit.cloud/jgeller112/content/019e2753-9be4-74bf-40d4-d9c5af097402)** (hosted on Posit Connect Cloud)
 
 The repo has two faces:
 
