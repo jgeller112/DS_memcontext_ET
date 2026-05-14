@@ -8,6 +8,7 @@ suppressPackageStartupMessages({
   library(readr)
   library(stringr)
   library(purrr)
+  library(markdown) # rsconnect misses this through shiny::includeMarkdown()
 })
 
 source(file.path("R", "pipeline.R"))
