@@ -858,6 +858,12 @@ encodingServer <- function(id) {
     output$dl_fixations <- make_dl(reactive(req(rv$fixations)), "encoding_fixations.csv")
     output$dl_fix_summary <- make_dl(reactive(req(rv$fix_summary)), "encoding_fix_aoi_summary.csv")
     output$dl_emoloc <- make_dl(reactive(req(rv$emoloc)), "encoding_emo_location_aoi.csv")
+
+    # Exposed for combinedServer — the Combined tab consumes these.
+    list(
+      fixations  = reactive(rv$fixations),
+      behavioral = reactive(rv$behavioral)
+    )
   })
 }
 
@@ -1222,6 +1228,85 @@ recognitionServer <- function(id) {
     output$dl_fixations <- make_dl(reactive(req(rv$fixations)), "recognition_fixations.csv")
     output$dl_fix_summary <- make_dl(reactive(req(rv$fix_summary)), "recognition_fix_summary.csv")
     output$dl_fix_by_cond <- make_dl(reactive(req(rv$fix_by_cond)), "recognition_fix_by_condition.csv")
+
+    # Exposed for combinedServer — the Combined tab consumes these.
+    list(
+      fixations  = reactive(rv$fixations),
+      behavioral = reactive(rv$behavioral)
+    )
+  })
+}
+
+combined_outputs_ui <- function(ns_id) {
+  ns <- NS(ns_id)
+  card(
+    card_header("Combined encoding + recognition"),
+    tags$p(
+      "Restricted to Backgrounds that appear in ",
+      tags$b("both"), " phases per participant. Recognition fixations",
+      " are pre-filtered to old + correct ",
+      tags$code("(stimulus_status == \"old\", accuracy == 1)"),
+      "—the same scope as the eyesim reinstatement pipeline."
+    ),
+    tags$p(
+      "Run the encoding ", tags$b("Detect fixations"), " step and the ",
+      "recognition ", tags$b("Detect fixations"), " step first. Tables ",
+      "below populate automatically."
+    ),
+    navset_card_tab(
+      nav_panel(
+        "Paired fixations (long)",
+        dl_csv(ns("dl_long")),
+        DTOutput(ns("tbl_long"))
+      ),
+      nav_panel(
+        "Per (participant × Background × AOI)",
+        dl_csv(ns("dl_per_bg")),
+        DTOutput(ns("tbl_per_bg"))
+      ),
+      nav_panel(
+        "Per (participant × Condition × AOI)",
+        dl_csv(ns("dl_per_cond")),
+        DTOutput(ns("tbl_per_cond"))
+      )
+    )
+  )
+}
+
+combinedServer <- function(id, enc_state, rec_state) {
+  moduleServer(id, function(input, output, session) {
+    fixations_long <- reactive({
+      enc <- enc_state$fixations()
+      rec <- rec_state$fixations()
+      validate(
+        need(!is.null(enc), "Run encoding fixation detection first."),
+        need(!is.null(rec), "Run recognition fixation detection first.")
+      )
+      build_fixations_long(enc, rec)
+    })
+
+    per_bg <- reactive(summarise_per_background(fixations_long()))
+    per_cd <- reactive(summarise_per_condition(fixations_long()))
+
+    render_dt <- function(tbl) {
+      datatable(tbl,
+        options = list(pageLength = 10, scrollX = TRUE),
+        rownames = FALSE
+      )
+    }
+    output$tbl_long    <- renderDT(req(fixations_long()) |> render_dt())
+    output$tbl_per_bg  <- renderDT(req(per_bg())         |> render_dt())
+    output$tbl_per_cond <- renderDT(req(per_cd())        |> render_dt())
+
+    make_dl <- function(tbl_react, fname) {
+      downloadHandler(
+        filename = function() fname,
+        content  = function(file) write_csv(tbl_react(), file)
+      )
+    }
+    output$dl_long    <- make_dl(fixations_long, "combined_fixations_long.csv")
+    output$dl_per_bg  <- make_dl(per_bg,         "combined_per_background.csv")
+    output$dl_per_cond <- make_dl(per_cd,        "combined_per_condition_aoi.csv")
   })
 }
 
@@ -1237,6 +1322,10 @@ ui <- page_navbar(
     "Recognition",
     phase_ui("rec", "Recognition"),
     phase_outputs_recognition("rec")
+  ),
+  nav_panel(
+    "Combined",
+    combined_outputs_ui("combined")
   ),
   nav_panel(
     "About",
@@ -1280,8 +1369,9 @@ ui <- page_navbar(
 )
 
 server <- function(input, output, session) {
-  encodingServer("enc")
-  recognitionServer("rec")
+  enc_state <- encodingServer("enc")
+  rec_state <- recognitionServer("rec")
+  combinedServer("combined", enc_state, rec_state)
 }
 
 shinyApp(ui, server)

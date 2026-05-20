@@ -226,6 +226,48 @@ Group-level rollup of `recognition_fix_summary.csv` — one row per `(Condition,
 
 ---
 
+# Combined (encoding + recognition) outputs
+
+All combined tables are restricted to Backgrounds that appear in **both** phases per participant; recognition fixations are pre-filtered to old + correct (`stimulus_status == "old"` AND `accuracy == 1`).
+
+## `combined_fixations_long.csv`
+Tall stack of encoding + recognition fixations, paired on `(participant, Background)`.
+
+| column | type | meaning |
+|---|---|---|
+| `participant` | chr | participant ID |
+| `Background` | chr | scene filename present in both phases |
+| `Condition` | chr | encoding condition (e.g. `neg-left`) — rides along from the behavioral join |
+| `List` | chr | counterbalance list label |
+| `AOI` | chr | `Left` / `Right` / `Outside` |
+| `x`, `y` | num | fixation centroid (px, screen coords) |
+| `duration` | num | fixation duration (ms) |
+| `onset` | num | fixation onset relative to trial start (ms) |
+| `phase` | chr | `"encoding"` or `"recognition"` |
+
+## `combined_per_background.csv`
+One row per `(participant, Background, Condition, AOI)`. `Outside` fixations dropped before summarising. Missing phase × AOI cells are filled with `n_fix = 0`, `total_dwell = 0`, `mean_dur = NA`.
+
+| column | type | meaning |
+|---|---|---|
+| `participant`, `Background`, `Condition`, `AOI` | mixed | grouping keys |
+| `encoding_n_fix`, `recognition_n_fix` | int | fixation counts in this AOI in each phase |
+| `encoding_mean_dur`, `recognition_mean_dur` | num | mean fixation duration (ms) in each phase |
+| `encoding_total_dwell`, `recognition_total_dwell` | num | total dwell time (ms) in each phase |
+
+## `combined_per_condition_aoi.csv`
+One row per `(participant, Condition, AOI)` — `combined_per_background` averaged across Backgrounds.
+
+| column | type | meaning |
+|---|---|---|
+| `participant`, `Condition`, `AOI` | mixed | grouping keys |
+| `encoding_n_backgrounds`, `recognition_n_backgrounds` | int | Backgrounds contributing to this cell in each phase |
+| `encoding_mean_n_fix`, `recognition_mean_n_fix` | num | mean of per-Background fixation counts |
+| `encoding_mean_fix_duration`, `recognition_mean_fix_duration` | num | mean (across Backgrounds) of within-Background mean fixation duration (ms) |
+| `encoding_mean_total_dwell_time`, `recognition_mean_total_dwell_time` | num | mean (across Backgrounds) of total dwell time in this AOI (ms) |
+
+---
+
 ## Notes
 
 - **`Outside` fixations** are dropped from all AOI summary tables (`*_aoi_summary`, `*_fix_summary`, `emo_location_aoi`). They are kept in the raw `*_fixations.csv` so you can re-filter as needed.

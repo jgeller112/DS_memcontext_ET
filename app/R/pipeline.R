@@ -415,3 +415,82 @@ preprocess_120hz <- function(gaze_trial) {
     )) |>
     ungroup()
 }
+
+# Stack encoding and recognition AOI-labeled fixations into one long frame
+# keyed on (participant, Background), restricted to backgrounds that
+# appear in *both* phases per participant (so every Background here is
+# paired). Recognition is pre-filtered to old + correct so the scope
+# matches the eyesim reinstatement pipeline.
+build_fixations_long <- function(enc_fix, rec_fix) {
+  keep_cols <- c("participant", "Background", "Condition", "List",
+                 "AOI", "x", "y", "duration", "onset")
+  enc_long <- enc_fix |>
+    mutate(phase = "encoding") |>
+    select(all_of(keep_cols), phase)
+  rec_long <- rec_fix |>
+    filter(stimulus_status == "old", accuracy == 1) |>
+    mutate(phase = "recognition") |>
+    select(all_of(keep_cols), phase)
+
+  paired_keys <- inner_join(
+    distinct(enc_long, participant, Background),
+    distinct(rec_long, participant, Background),
+    by = c("participant", "Background")
+  )
+
+  bind_rows(enc_long, rec_long) |>
+    semi_join(paired_keys, by = c("participant", "Background")) |>
+    arrange(participant, Background, phase, onset)
+}
+
+# Per-(participant, Background, AOI) side-by-side comparison. Outputs
+# encoding_* and recognition_* metric columns so the table is readable
+# at a glance. Outside fixations dropped.
+summarise_per_background <- function(fixations_long) {
+  fixations_long |>
+    filter(AOI != "Outside") |>
+    group_by(participant, Background, Condition, phase, AOI) |>
+    summarise(
+      n_fix       = n(),
+      mean_dur    = mean(duration, na.rm = TRUE),
+      total_dwell = sum(duration,  na.rm = TRUE),
+      .groups     = "drop"
+    ) |>
+    pivot_wider(
+      names_from  = phase,
+      values_from = c(n_fix, mean_dur, total_dwell),
+      names_glue  = "{phase}_{.value}",
+      values_fill = list(n_fix = 0L, mean_dur = NA_real_, total_dwell = 0)
+    )
+}
+
+# Roll the per-Background paired summary up to (participant, Condition,
+# AOI). One row per cell with mean-across-Backgrounds metrics, encoding
+# vs recognition side by side.
+summarise_per_condition <- function(fixations_long) {
+  per_bg <- fixations_long |>
+    filter(AOI != "Outside") |>
+    group_by(participant, Background, Condition, phase, AOI) |>
+    summarise(
+      n_fix       = n(),
+      mean_dur    = mean(duration, na.rm = TRUE),
+      total_dwell = sum(duration,  na.rm = TRUE),
+      .groups     = "drop"
+    )
+
+  per_bg |>
+    group_by(participant, Condition, phase, AOI) |>
+    summarise(
+      n_backgrounds         = n_distinct(Background),
+      mean_n_fix            = mean(n_fix,       na.rm = TRUE),
+      mean_fix_duration     = mean(mean_dur,    na.rm = TRUE),
+      mean_total_dwell_time = mean(total_dwell, na.rm = TRUE),
+      .groups               = "drop"
+    ) |>
+    pivot_wider(
+      names_from  = phase,
+      values_from = c(n_backgrounds, mean_n_fix,
+                      mean_fix_duration, mean_total_dwell_time),
+      names_glue  = "{phase}_{.value}"
+    )
+}

@@ -1228,14 +1228,14 @@ dropped after filtering. Restricted to Backgrounds that appear in *both*
 phases per participant (so every Background here has paired data).
 
 ```{r merge-recognition-encoding}
-encoding_long <- fixations_behav |>
+encoding_long <- fix_labeled |>
   select(participant, Background, Condition, List, phase,
-         x, y, duration, onset)
+         AOI, x, y, duration, onset)
 
-recognition_long <- recognition_fixations_behav |>
+recognition_long <- recognition_fix_labeled |>
   filter(stimulus_status == "old", accuracy == 1) |>
   select(participant, Background, Condition, List, phase,
-         x, y, duration, onset)
+         AOI, x, y, duration, onset)
 
 paired_keys <- inner_join(
   distinct(encoding_long,    participant, Background),
@@ -1248,6 +1248,61 @@ fixations_long <- bind_rows(encoding_long, recognition_long) |>
   arrange(participant, Background, phase, onset)
 
 fixations_long
+```
+
+## Combined summaries (encoding vs recognition)
+
+Two side-by-side rollups built off `fixations_long`:
+
+1. **Per (participant × Background × Condition × AOI)** — one row per Background a participant saw at *both* phases, with `encoding_*` and `recognition_*` n_fix / mean_dur / total_dwell as separate columns.
+2. **Per (participant × Condition × AOI)** — the above averaged across Backgrounds within each cell, so you can read encoding vs recognition dwell directly per condition.
+
+Both drop `AOI == "Outside"` before summarising.
+
+```{r combined-summaries}
+combined_per_background <- fixations_long |>
+  filter(AOI != "Outside") |>
+  group_by(participant, Background, Condition, phase, AOI) |>
+  summarise(
+    n_fix       = n(),
+    mean_dur    = mean(duration, na.rm = TRUE),
+    total_dwell = sum(duration,  na.rm = TRUE),
+    .groups     = "drop"
+  ) |>
+  pivot_wider(
+    names_from  = phase,
+    values_from = c(n_fix, mean_dur, total_dwell),
+    names_glue  = "{phase}_{.value}",
+    values_fill = list(n_fix = 0L, mean_dur = NA_real_, total_dwell = 0)
+  )
+
+combined_per_background
+
+combined_per_condition <- fixations_long |>
+  filter(AOI != "Outside") |>
+  group_by(participant, Background, Condition, phase, AOI) |>
+  summarise(
+    n_fix       = n(),
+    mean_dur    = mean(duration, na.rm = TRUE),
+    total_dwell = sum(duration,  na.rm = TRUE),
+    .groups     = "drop"
+  ) |>
+  group_by(participant, Condition, phase, AOI) |>
+  summarise(
+    n_backgrounds         = n_distinct(Background),
+    mean_n_fix            = mean(n_fix,       na.rm = TRUE),
+    mean_fix_duration     = mean(mean_dur,    na.rm = TRUE),
+    mean_total_dwell_time = mean(total_dwell, na.rm = TRUE),
+    .groups               = "drop"
+  ) |>
+  pivot_wider(
+    names_from  = phase,
+    values_from = c(n_backgrounds, mean_n_fix,
+                    mean_fix_duration, mean_total_dwell_time),
+    names_glue  = "{phase}_{.value}"
+  )
+
+combined_per_condition
 ```
 
 ## Gaze reinstatement (eyesim)
@@ -1369,6 +1424,8 @@ separate.
 | `validation_encoding.csv`, `validation_recognition.csv` | calibration metrics per validation block |
 | `missing_per_trial_{encoding,recognition}.csv` | per (participant, trial) NA-sample count + prop_missing in the 5-s window |
 | `missing_per_subject_{encoding,recognition}.csv` | per-participant rollup of prop_missing across trials |
+| `combined_per_background.csv` | per (participant × Background × Condition × AOI), encoding vs recognition side by side |
+| `combined_per_condition_aoi.csv` | per (participant × Condition × AOI), averaged across Backgrounds — encoding vs recognition side by side |
 | `fixations_encoding.csv`, `fixations_recognition.csv` | I-VT fixation events |
 | `fixation_aoi_summary_encoding.csv` | per (participant, trial, AOI) dwell |
 | `fixation_summary_recognition.csv` | per-trial recognition fixation count + mean duration, by AOI (old + correct) |
@@ -1406,6 +1463,10 @@ write_csv(fix_summary,             out("fixation_aoi_summary_encoding.csv"))
 write_csv(recognition_fix_summary,       out("fixation_summary_recognition.csv"))
 write_csv(recognition_fix_by_condition,  out("fixation_summary_recognition_by_condition.csv"))
 write_csv(emo_dwell,               out("emo_dwell_encoding.csv"))
+
+# Combined encoding ↔ recognition summaries
+write_csv(combined_per_background, out("combined_per_background.csv"))
+write_csv(combined_per_condition,  out("combined_per_condition_aoi.csv"))
 
 # Gaze reinstatement
 write_csv(reinstatement, out("reinstatement.csv"))
