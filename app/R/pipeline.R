@@ -418,17 +418,28 @@ preprocess_120hz <- function(gaze_trial) {
 
 # Stack encoding and recognition AOI-labeled fixations into one long frame
 # keyed on (participant, Background), restricted to backgrounds that
-# appear in *both* phases per participant (so every Background here is
-# paired). Recognition is pre-filtered to old + correct so the scope
-# matches the eyesim reinstatement pipeline.
-build_fixations_long <- function(enc_fix, rec_fix) {
+# appear in *both* phases per participant. `recognition_scope` controls
+# which recognition trials count:
+#   - "old_correct" (default): stimulus_status == "old" & accuracy == 1.
+#     Matches the eyesim reinstatement scope.
+#   - "all": every recognition trial, regardless of status/accuracy.
+# Pairing is computed *after* the recognition filter, so "all" can yield
+# more paired Backgrounds than "old_correct" (e.g., when the participant
+# missed an old item the Background still appears in recognition).
+build_fixations_long <- function(enc_fix, rec_fix,
+                                 recognition_scope = c("old_correct", "all")) {
+  recognition_scope <- match.arg(recognition_scope)
   keep_cols <- c("participant", "Background", "Condition", "List",
                  "AOI", "x", "y", "duration", "onset")
   enc_long <- enc_fix |>
     mutate(phase = "encoding") |>
     select(all_of(keep_cols), phase)
-  rec_long <- rec_fix |>
-    filter(stimulus_status == "old", accuracy == 1) |>
+  rec_filtered <- if (recognition_scope == "old_correct") {
+    rec_fix |> filter(stimulus_status == "old", accuracy == 1)
+  } else {
+    rec_fix
+  }
+  rec_long <- rec_filtered |>
     mutate(phase = "recognition") |>
     select(all_of(keep_cols), phase)
 

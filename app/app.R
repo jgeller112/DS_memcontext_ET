@@ -383,7 +383,23 @@ phase_outputs_encoding <- function(ns_id) {
 
 phase_outputs_recognition <- function(ns_id) {
   ns <- NS(ns_id)
-  navset_card_tab(
+  tagList(
+    card(
+      card_header("Recognition trial scope"),
+      radioButtons(ns("scope"), NULL,
+        choices = c(
+          "Old + correct (hits only)" = "old_correct",
+          "All trials"                = "all"
+        ),
+        selected = "old_correct", inline = TRUE
+      ),
+      tags$small(tags$em(
+        "Applies to the AOI summary and AOI × Condition rollup tabs ",
+        "below (and the Summary plots tab). The raw Fixations table and ",
+        "the Combined panel are independent."
+      ))
+    ),
+    navset_card_tab(
     nav_panel(
       "Behavioral",
       dl_csv(ns("dl_behavioral")),
@@ -517,6 +533,7 @@ phase_outputs_recognition <- function(ns_id) {
         plotOutput(ns("viz_plot"), height = "820px")
       )
     )
+  )
   )
 }
 
@@ -872,7 +889,7 @@ recognitionServer <- function(id) {
     rv <- reactiveValues(
       behavioral = NULL, acc = NULL, acc_cond = NULL,
       duration = NULL, validation = NULL, msg_events = NULL,
-      fixations = NULL, fix_summary = NULL, fix_by_cond = NULL,
+      fixations = NULL,
       trial_missing = NULL, subject_missing = NULL,
       status = "Upload files, then click a Run button."
     )
@@ -988,33 +1005,9 @@ recognitionServer <- function(id) {
 
             fix_labeled <- label_aoi(fixations)
 
-            fix_summary <- fix_labeled |>
-              filter(stimulus_status == "old" | is.na(stimulus_status)) |>
-              filter(is.na(accuracy) | accuracy == 1) |>
-              filter(AOI != "Outside") |>
-              group_by(participant, trial, Background, Condition, AOI) |>
-              summarise(
-                n_fixations = n(),
-                mean_fix_duration = mean(duration, na.rm = TRUE),
-                total_dwell_time = sum(duration, na.rm = TRUE),
-                .groups = "drop"
-              )
-
-            fix_by_cond <- fix_summary |>
-              group_by(Condition, AOI) |>
-              summarise(
-                n_trials = n(),
-                mean_n_fixations = mean(n_fixations, na.rm = TRUE),
-                mean_fix_duration = mean(mean_fix_duration, na.rm = TRUE),
-                mean_total_dwell_time = mean(total_dwell_time, na.rm = TRUE),
-                .groups = "drop"
-              )
-
             rv$fixations <- fix_labeled
-            rv$fix_summary <- fix_summary
-            rv$fix_by_cond <- fix_by_cond
             rv$status <- sprintf(
-              "Fixations: %d events across %d trials. Old + correct summary built.",
+              "Fixations: %d events across %d trials. Summary tables follow the scope toggle.",
               nrow(fix_labeled), n_distinct(paste(
                 fix_labeled$participant,
                 fix_labeled$trial
@@ -1037,6 +1030,43 @@ recognitionServer <- function(id) {
       run_fixations()
     })
 
+    # Scope-aware summary reactives. `input$scope` is the radio in
+    # phase_outputs_recognition: "old_correct" keeps the historical
+    # filter (hits + lures w/ no behavioral); "all" keeps every fixation
+    # regardless of status / accuracy. Outside-AOI fixations always
+    # dropped — the summary is about AOI dwell.
+    fix_summary_react <- reactive({
+      fl <- rv$fixations
+      req(fl)
+      scope <- input$scope %||% "old_correct"
+      if (scope == "old_correct") {
+        fl <- fl |>
+          filter(stimulus_status == "old" | is.na(stimulus_status)) |>
+          filter(is.na(accuracy) | accuracy == 1)
+      }
+      fl |>
+        filter(AOI != "Outside") |>
+        group_by(participant, trial, Background, Condition, AOI) |>
+        summarise(
+          n_fixations       = n(),
+          mean_fix_duration = mean(duration, na.rm = TRUE),
+          total_dwell_time  = sum(duration,  na.rm = TRUE),
+          .groups           = "drop"
+        )
+    })
+
+    fix_by_cond_react <- reactive({
+      fix_summary_react() |>
+        group_by(Condition, AOI) |>
+        summarise(
+          n_trials              = n(),
+          mean_n_fixations      = mean(n_fixations,       na.rm = TRUE),
+          mean_fix_duration     = mean(mean_fix_duration, na.rm = TRUE),
+          mean_total_dwell_time = mean(total_dwell_time,  na.rm = TRUE),
+          .groups               = "drop"
+        )
+    })
+
     render_dt <- function(tbl) {
       datatable(tbl,
         options = list(pageLength = 10, scrollX = TRUE),
@@ -1052,16 +1082,15 @@ recognitionServer <- function(id) {
     output$tbl_trial_missing   <- renderDT(req(rv$trial_missing)   |> render_dt())
     output$tbl_subject_missing <- renderDT(req(rv$subject_missing) |> render_dt())
     output$tbl_fixations <- renderDT(req(rv$fixations) |> render_dt())
-    output$tbl_fix_summary <- renderDT(req(rv$fix_summary) |> render_dt())
-    output$tbl_fix_by_cond <- renderDT(req(rv$fix_by_cond) |> render_dt())
+    output$tbl_fix_summary <- renderDT(fix_summary_react()  |> render_dt())
+    output$tbl_fix_by_cond <- renderDT(fix_by_cond_react()  |> render_dt())
 
     # Recognition summary plots: roll the per-trial fix_summary up to one
     # row per (participant, Condition, AOI), then derive emo / location /
     # on_object from Condition so the same X / fill / facet choices work
     # as on the encoding tab.
     output$plot_summary <- renderPlot({
-      req(rv$fix_summary)
-      df <- rv$fix_summary |>
+      df <- fix_summary_react() |>
         group_by(participant, Condition, AOI) |>
         summarise(
           mean_total_dwell_time = mean(total_dwell_time,  na.rm = TRUE),
@@ -1226,8 +1255,8 @@ recognitionServer <- function(id) {
     output$dl_trial_missing   <- make_dl(reactive(req(rv$trial_missing)),   "recognition_missing_per_trial.csv")
     output$dl_subject_missing <- make_dl(reactive(req(rv$subject_missing)), "recognition_missing_per_subject.csv")
     output$dl_fixations <- make_dl(reactive(req(rv$fixations)), "recognition_fixations.csv")
-    output$dl_fix_summary <- make_dl(reactive(req(rv$fix_summary)), "recognition_fix_summary.csv")
-    output$dl_fix_by_cond <- make_dl(reactive(req(rv$fix_by_cond)), "recognition_fix_by_condition.csv")
+    output$dl_fix_summary <- make_dl(fix_summary_react,  "recognition_fix_summary.csv")
+    output$dl_fix_by_cond <- make_dl(fix_by_cond_react,  "recognition_fix_by_condition.csv")
 
     # Exposed for combinedServer — the Combined tab consumes these.
     list(
@@ -1243,15 +1272,20 @@ combined_outputs_ui <- function(ns_id) {
     card_header("Combined encoding + recognition"),
     tags$p(
       "Restricted to Backgrounds that appear in ",
-      tags$b("both"), " phases per participant. Recognition fixations",
-      " are pre-filtered to old + correct ",
-      tags$code("(stimulus_status == \"old\", accuracy == 1)"),
-      "—the same scope as the eyesim reinstatement pipeline."
+      tags$b("both"), " phases per participant. Recognition scope is ",
+      "controlled by the radio below."
     ),
     tags$p(
       "Run the encoding ", tags$b("Detect fixations"), " step and the ",
       "recognition ", tags$b("Detect fixations"), " step first. Tables ",
       "below populate automatically."
+    ),
+    radioButtons(ns("rec_scope"), "Recognition scope",
+      choices = c(
+        "Old + correct (hits only)" = "old_correct",
+        "All trials"                = "all"
+      ),
+      selected = "old_correct", inline = TRUE
     ),
     navset_card_tab(
       nav_panel(
@@ -1282,7 +1316,9 @@ combinedServer <- function(id, enc_state, rec_state) {
         need(!is.null(enc), "Run encoding fixation detection first."),
         need(!is.null(rec), "Run recognition fixation detection first.")
       )
-      build_fixations_long(enc, rec)
+      build_fixations_long(enc, rec,
+        recognition_scope = input$rec_scope %||% "old_correct"
+      )
     })
 
     per_bg <- reactive(summarise_per_background(fixations_long()))
