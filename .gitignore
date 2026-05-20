@@ -21,8 +21,16 @@ encoding_behavioral.html
 .DS_Store
 Thumbs.db
 
+# Office lockfiles (Word/Excel write a ~$<name> sibling while open)
+~$*
+
+# Plot exports — keep PNG/PDF/etc. out of the repo
+*.png
+*.pdf
+
 # shinyapps.io deploy metadata (contains tokens)
 rsconnect/
 
 # Claude Code local IDE state
 .claude/
+.positai
