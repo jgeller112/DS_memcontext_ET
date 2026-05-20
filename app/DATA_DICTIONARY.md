@@ -15,6 +15,7 @@ Every CSV the Shiny app writes is described below. The qmd pipeline produces the
 | trial | 1-indexed row order within a participant's behavioral file (after non-task rows are dropped) |
 | time | Tobii `system_time_stamp` is microseconds; all derived `*_ms` / `*_dwell` / `duration` fields are milliseconds |
 | I-VT params | Tobii Pro Lab defaults — 30 °/s velocity threshold, 60 ms min fixation, 75 ms merge gap, 0.5 ° merge angle, `one_degree = 40 px/deg` |
+| trial window | every trial is truncated to **exactly 5 s** (5000 ms) of gaze data after onset — any samples beyond that are dropped before preprocessing, I-VT, and missing-data QC |
 
 ---
 
@@ -56,6 +57,30 @@ Trial-onset and offset markers from the Tobii msg file.
 | `msg` | chr | raw message (e.g. `onset_airyroom.seaweed.neu.right.jpeg`) |
 | `event` | chr | `"onset"` or `"offset"` |
 | `stim` | chr | the stim filename the message refers to (msg with the `onset_`/`offset_` prefix stripped) |
+
+## `encoding_missing_per_trial.csv`
+One row per `(participant, trial)`. Missing-sample counts within the 5-s trial window. A sample is "missing" when the binocular-average `avg_x_px` or `avg_y_px` is NA (i.e. both eyes lost or one eye dropped and the other never recovered).
+
+| column | type | meaning |
+|---|---|---|
+| `participant`, `trial` | mixed | grouping keys |
+| `n_samples` | int | number of gaze samples in this trial (after truncation to ≤5000 ms) |
+| `n_missing` | int | samples with NA in `avg_x_px` or `avg_y_px` |
+| `prop_missing` | num | `n_missing / n_samples` (0–1) |
+| `duration_ms` | num | observed duration of this trial — `max(time_ms) - min(time_ms)` |
+| `trial_dur_ms` | num | configured truncation length (5000 by default) |
+
+## `encoding_missing_per_subject.csv`
+Per-participant rollup of `encoding_missing_per_trial.csv`.
+
+| column | type | meaning |
+|---|---|---|
+| `participant` | chr | participant ID |
+| `n_trials` | int | trials contributing to this row |
+| `total_samples`, `total_missing` | int | sums across trials |
+| `mean_prop_missing`, `median_prop_missing`, `max_prop_missing` | num | distribution of `prop_missing` across trials |
+| `n_trials_over_thresh` | int | trials with `prop_missing > 0.50` (the default flag threshold) |
+| `bad_trial_threshold` | num | threshold used for `n_trials_over_thresh` (0.50) |
 
 ## `encoding_fixations.csv`
 Every I-VT fixation event, AOI-labeled and joined with behavioral fields. Output of `kollaR::algorithm_ivt()` after `kollaR::preprocess_gaze()`, restricted to within-trial samples.
@@ -159,7 +184,13 @@ QC on back-task picture-display duration. Each back-task picture should be on sc
 Same columns as `encoding_validation.csv` — calibration QC for the recognition session.
 
 ## `recognition_msg_events.csv`
-Same columns as `encoding_msg_events.csv`. Recognition stim names are kept whole (not decomposed into background/object/emo/location).
+Same columns as `encoding_msg_events.csv`. Recognition `stim` names are kept whole (the on-screen filename, typically the bare Background) — there is no encoding-style decomposition because the recognition `Composite` column is not reliably populated. Within a participant, each Background appears on exactly one recognition trial, so `(participant, Background)` is sufficient to key a trial and `Condition` rides along from the behavioral join.
+
+## `recognition_missing_per_trial.csv`
+Same definition + columns as `encoding_missing_per_trial.csv`, applied to recognition gaze (5-s truncated).
+
+## `recognition_missing_per_subject.csv`
+Same definition + columns as `encoding_missing_per_subject.csv`, applied to recognition gaze.
 
 ## `recognition_fixations.csv`
 Recognition I-VT fixations, AOI-labeled, joined with `recognition_behavioral`.
@@ -167,7 +198,7 @@ Recognition I-VT fixations, AOI-labeled, joined with `recognition_behavioral`.
 | column | type | meaning |
 |---|---|---|
 | `participant`, `trial`, `onset`, `offset`, `duration`, `x`, `y` | mixed | as in encoding fixations |
-| `stim` | chr | recognition stim filename (not decomposed) |
+| `stim` | chr | on-screen recognition stim filename (typically the bare Background — what the participant actually saw) |
 | `Background`, `Composite`, `Object`, `Condition`, `stimulus_status`, `List`, `response`, `accuracy`, `phase` | mixed | merged from `recognition_behavioral.csv` |
 | `x_pic`, `y_pic` | num | picture-relative coords |
 | `AOI` | chr | `Left` / `Right` / `Outside` |

@@ -91,7 +91,15 @@ aoi_plot <- function(fix_df, img_array, stim_name, title,
       title = title, subtitle = stim_name,
       x = "screen x (px)", y = "screen y, flipped (px)"
     ) +
-    theme_minimal()
+    theme_minimal(base_size = 16) +
+    theme(
+      plot.title    = element_text(face = "bold", size = 18),
+      plot.subtitle = element_text(face = "bold", size = 14),
+      axis.title    = element_text(face = "bold", size = 16),
+      axis.text     = element_text(face = "bold", size = 14),
+      legend.title  = element_text(face = "bold", size = 14),
+      legend.text   = element_text(size = 13)
+    )
 }
 
 heatmap_plot <- function(fix_df, img_array, stim_name, title) {
@@ -132,7 +140,13 @@ heatmap_plot <- function(fix_df, img_array, stim_name, title) {
       title = title, subtitle = stim_name,
       x = "screen x (px)", y = "screen y, flipped (px)"
     ) +
-    theme_minimal()
+    theme_minimal(base_size = 16) +
+    theme(
+      plot.title    = element_text(face = "bold", size = 18),
+      plot.subtitle = element_text(face = "bold", size = 14),
+      axis.title    = element_text(face = "bold", size = 16),
+      axis.text     = element_text(face = "bold", size = 14)
+    )
 }
 
 okabe_ito <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442",
@@ -262,6 +276,16 @@ phase_outputs_encoding <- function(ns_id) {
       DTOutput(ns("tbl_msg_events"))
     ),
     nav_panel(
+      "Missing data — per trial",
+      dl_csv(ns("dl_trial_missing")),
+      DTOutput(ns("tbl_trial_missing"))
+    ),
+    nav_panel(
+      "Missing data — per subject",
+      dl_csv(ns("dl_subject_missing")),
+      DTOutput(ns("tbl_subject_missing"))
+    ),
+    nav_panel(
       "Fixations",
       dl_csv(ns("dl_fixations")),
       DTOutput(ns("tbl_fixations"))
@@ -351,7 +375,7 @@ phase_outputs_encoding <- function(ns_id) {
             choices = NULL
           )
         ),
-        plotOutput(ns("viz_plot"), height = "640px")
+        plotOutput(ns("viz_plot"), height = "820px")
       )
     )
   )
@@ -389,6 +413,16 @@ phase_outputs_recognition <- function(ns_id) {
       "Trial events",
       dl_csv(ns("dl_msg_events")),
       DTOutput(ns("tbl_msg_events"))
+    ),
+    nav_panel(
+      "Missing data — per trial",
+      dl_csv(ns("dl_trial_missing")),
+      DTOutput(ns("tbl_trial_missing"))
+    ),
+    nav_panel(
+      "Missing data — per subject",
+      dl_csv(ns("dl_subject_missing")),
+      DTOutput(ns("tbl_subject_missing"))
     ),
     nav_panel(
       "Fixations",
@@ -480,7 +514,7 @@ phase_outputs_recognition <- function(ns_id) {
             choices = NULL
           )
         ),
-        plotOutput(ns("viz_plot"), height = "640px")
+        plotOutput(ns("viz_plot"), height = "820px")
       )
     )
   )
@@ -492,6 +526,7 @@ encodingServer <- function(id) {
       behavioral = NULL, validation = NULL, msg_events = NULL,
       fixations = NULL, fix_summary = NULL,
       emoloc = NULL,
+      trial_missing = NULL, subject_missing = NULL,
       status = "Upload files, then click a Run button."
     )
 
@@ -553,8 +588,11 @@ encodingServer <- function(id) {
             incProgress(0.2, detail = "Assigning samples to trials")
             trial_stim <- build_trial_stim_encoding(msg_events)
             gaze_trial <- assign_gaze_to_trials(gaze, msg_events, trial_stim,
-              decompose_stim = TRUE
+              decompose_stim = TRUE, trial_dur_ms = 5000
             )
+
+            rv$trial_missing   <- trial_missing(gaze_trial)
+            rv$subject_missing <- subject_missing(rv$trial_missing)
 
             incProgress(0.2, detail = "Downsampling to 120 Hz + preprocessing")
             gaze_pp <- preprocess_120hz(gaze_trial)
@@ -679,6 +717,8 @@ encodingServer <- function(id) {
     output$tbl_behavioral <- renderDT(req(rv$behavioral) |> render_dt())
     output$tbl_validation <- renderDT(req(rv$validation) |> render_dt())
     output$tbl_msg_events <- renderDT(req(rv$msg_events) |> render_dt())
+    output$tbl_trial_missing   <- renderDT(req(rv$trial_missing)   |> render_dt())
+    output$tbl_subject_missing <- renderDT(req(rv$subject_missing) |> render_dt())
     output$tbl_fixations <- renderDT(req(rv$fixations) |> render_dt())
     output$tbl_fix_summary <- renderDT(req(rv$fix_summary) |> render_dt())
     output$tbl_emoloc <- renderDT(req(rv$emoloc) |> render_dt())
@@ -813,6 +853,8 @@ encodingServer <- function(id) {
     output$dl_behavioral <- make_dl(reactive(req(rv$behavioral)), "encoding_behavioral.csv")
     output$dl_validation <- make_dl(reactive(req(rv$validation)), "encoding_validation.csv")
     output$dl_msg_events <- make_dl(reactive(req(rv$msg_events)), "encoding_msg_events.csv")
+    output$dl_trial_missing   <- make_dl(reactive(req(rv$trial_missing)),   "encoding_missing_per_trial.csv")
+    output$dl_subject_missing <- make_dl(reactive(req(rv$subject_missing)), "encoding_missing_per_subject.csv")
     output$dl_fixations <- make_dl(reactive(req(rv$fixations)), "encoding_fixations.csv")
     output$dl_fix_summary <- make_dl(reactive(req(rv$fix_summary)), "encoding_fix_aoi_summary.csv")
     output$dl_emoloc <- make_dl(reactive(req(rv$emoloc)), "encoding_emo_location_aoi.csv")
@@ -825,6 +867,7 @@ recognitionServer <- function(id) {
       behavioral = NULL, acc = NULL, acc_cond = NULL,
       duration = NULL, validation = NULL, msg_events = NULL,
       fixations = NULL, fix_summary = NULL, fix_by_cond = NULL,
+      trial_missing = NULL, subject_missing = NULL,
       status = "Upload files, then click a Run button."
     )
     output$status <- renderText(rv$status)
@@ -914,8 +957,11 @@ recognitionServer <- function(id) {
             incProgress(0.2, detail = "Assigning samples to trials")
             trial_stim <- build_trial_stim_recognition(msg_events)
             gaze_trial <- assign_gaze_to_trials(gaze, msg_events, trial_stim,
-              decompose_stim = FALSE
+              decompose_stim = FALSE, trial_dur_ms = 5000
             )
+
+            rv$trial_missing   <- trial_missing(gaze_trial)
+            rv$subject_missing <- subject_missing(rv$trial_missing)
 
             incProgress(0.2, detail = "Downsampling to 120 Hz + preprocessing")
             gaze_pp <- preprocess_120hz(gaze_trial)
@@ -997,6 +1043,8 @@ recognitionServer <- function(id) {
     output$tbl_duration <- renderDT(req(rv$duration) |> render_dt())
     output$tbl_validation <- renderDT(req(rv$validation) |> render_dt())
     output$tbl_msg_events <- renderDT(req(rv$msg_events) |> render_dt())
+    output$tbl_trial_missing   <- renderDT(req(rv$trial_missing)   |> render_dt())
+    output$tbl_subject_missing <- renderDT(req(rv$subject_missing) |> render_dt())
     output$tbl_fixations <- renderDT(req(rv$fixations) |> render_dt())
     output$tbl_fix_summary <- renderDT(req(rv$fix_summary) |> render_dt())
     output$tbl_fix_by_cond <- renderDT(req(rv$fix_by_cond) |> render_dt())
@@ -1043,26 +1091,38 @@ recognitionServer <- function(id) {
       )
     })
 
+    # In recognition, the same background is shown to participants who saw
+    # it encoded under different conditions (counterbalanced across lists),
+    # so collapsing across participants by Background alone would mix
+    # conditions. The all/heatmap dropdown is keyed on (stim × Condition)
+    # and the plot filters on both. Dropdown choices come from the
+    # fixations table directly — they are not gated on whether the user
+    # has uploaded matching images yet, so the available stim × condition
+    # combinations are visible up front; image availability is validated
+    # at plot time.
+    pick_sep <- " || "
     observe({
-      req(rv$fixations, viz_images())
+      req(rv$fixations)
       mode <- input$viz_mode %||% "single"
-      imgs <- names(viz_images())
-      if (length(imgs) == 0) {
-        updateSelectInput(session, "viz_pick", choices = character(0))
-        return()
-      }
       if (mode %in% c("all", "heatmap")) {
-        stims <- rv$fixations |>
-          filter(stim %in% imgs) |>
-          distinct(stim) |>
-          arrange(stim) |>
-          pull(stim)
-        updateSelectInput(session, "viz_pick", choices = stims)
+        combos <- rv$fixations |>
+          filter(!is.na(Condition)) |>
+          distinct(stim, Condition) |>
+          arrange(stim, Condition)
+        if (nrow(combos) == 0) {
+          updateSelectInput(session, "viz_pick", choices = character(0))
+          return()
+        }
+        choices <- setNames(
+          paste(combos$stim, combos$Condition, sep = pick_sep),
+          paste0(combos$stim, " — ", combos$Condition)
+        )
+        updateSelectInput(session, "viz_pick", choices = choices)
       } else {
         req(input$viz_participant)
         trials <- rv$fixations |>
-          filter(participant == input$viz_participant, stim %in% imgs) |>
-          distinct(trial, stim) |>
+          filter(participant == input$viz_participant) |>
+          distinct(trial, stim, Condition) |>
           arrange(trial)
         if (nrow(trials) == 0) {
           updateSelectInput(session, "viz_pick", choices = character(0))
@@ -1070,7 +1130,8 @@ recognitionServer <- function(id) {
         }
         choices <- setNames(
           as.character(trials$trial),
-          paste0("Trial ", trials$trial, " — ", trials$stim)
+          paste0("Trial ", trials$trial, " — ", trials$stim,
+                 " — ", trials$Condition)
         )
         updateSelectInput(session, "viz_pick", choices = choices)
       }
@@ -1084,14 +1145,19 @@ recognitionServer <- function(id) {
         "Upload at least one stim image to view fixations."
       ))
       mode <- input$viz_mode %||% "single"
+      cond <- NA_character_
 
       if (mode %in% c("all", "heatmap")) {
-        stim_name <- input$viz_pick
+        parts <- strsplit(input$viz_pick, pick_sep, fixed = TRUE)[[1]]
+        validate(need(length(parts) == 2,
+          "Pick a stim × condition combination."))
+        stim_name <- parts[1]; cond <- parts[2]
         validate(need(
           nzchar(stim_name) && stim_name %in% names(imgs),
           "Pick a stim whose image you've uploaded."
         ))
-        fix_df <- rv$fixations |> filter(stim == stim_name)
+        fix_df <- rv$fixations |>
+          filter(stim == stim_name, Condition == cond)
       } else {
         req(input$viz_participant)
         trial_pick <- suppressWarnings(as.integer(input$viz_pick))
@@ -1120,11 +1186,12 @@ recognitionServer <- function(id) {
           "Need at least 5 fixations to estimate a heatmap."
         ))
         heatmap_plot(fix_df, img_array, stim_name,
-          title = "Fixation heatmap (all participants)"
+          title = paste0("Fixation heatmap — ", cond,
+                         " (all participants)")
         )
       } else if (mode == "all") {
         aoi_plot(fix_df, img_array, stim_name,
-          title = "Fixations across participants",
+          title = paste0("Fixations across participants — ", cond),
           color_by = "participant"
         )
       } else {
@@ -1150,6 +1217,8 @@ recognitionServer <- function(id) {
     output$dl_duration <- make_dl(reactive(req(rv$duration)), "recognition_duration_summary.csv")
     output$dl_validation <- make_dl(reactive(req(rv$validation)), "recognition_validation.csv")
     output$dl_msg_events <- make_dl(reactive(req(rv$msg_events)), "recognition_msg_events.csv")
+    output$dl_trial_missing   <- make_dl(reactive(req(rv$trial_missing)),   "recognition_missing_per_trial.csv")
+    output$dl_subject_missing <- make_dl(reactive(req(rv$subject_missing)), "recognition_missing_per_subject.csv")
     output$dl_fixations <- make_dl(reactive(req(rv$fixations)), "recognition_fixations.csv")
     output$dl_fix_summary <- make_dl(reactive(req(rv$fix_summary)), "recognition_fix_summary.csv")
     output$dl_fix_by_cond <- make_dl(reactive(req(rv$fix_by_cond)), "recognition_fix_by_condition.csv")

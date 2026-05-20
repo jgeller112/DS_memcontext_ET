@@ -94,12 +94,16 @@ corresponding folder.
 | `downsample_gaze` | gaze tibble | gaze binned to a fixed sample rate |
 
 ```{r loaders}
-read_behavioral <- function(path) {
+read_behavioral <- function(path, n_practice = 3) {
+  # Encoding starts with `n_practice` practice trials that have no ET
+  # data — Tobii msg onsets start at the first real trial. Drop those
+  # rows so behavioral trial 1 aligns with ET trial 1.
   read_csv(path, show_col_types = FALSE) |>
     filter(!is.na(Background), !is.na(Object), !is.na(Condition)) |>
+    slice(-seq_len(n_practice)) |>
     mutate(
       participant = extract_pid(path),
-      trial       = row_number(), 
+      trial       = row_number(),
       phase = "encoding"
       ) |>
     select(
@@ -109,9 +113,9 @@ read_behavioral <- function(path) {
       Object,
       Condition,
       List,
-      mouse_clicked_name = mouse.clicked_name, 
+      mouse_clicked_name = mouse.clicked_name,
       phase
-    ) 
+    )
 }
 
 read_gaze <- function(path) {
@@ -411,6 +415,10 @@ gaze_trial <- gaze |>
   group_by(participant, trial) |>
   mutate(time_ms = time_ms - min(time_ms)) |>
   ungroup() |>
+  # Truncate every trial to exactly 5 s. PsychoPy's pic-display nominal
+  # duration is 5 s; trimming here means every downstream analysis sees the
+  # same window even when a tail of samples leaks past offset.
+  filter(time_ms <= 5000) |>
   select(
     participant,
     trial,
@@ -447,6 +455,43 @@ stopifnot(
 )
 
 msg_balance
+```
+
+## Missing-data QC
+
+Count NA samples inside the 5-s trial window. A sample is "missing" when
+the binocular average is NA on either axis — both eyes lost, or one
+eye dropped and the other never recovered. Reported per trial, then
+rolled up per subject so trackers / participants with high data loss are
+visible at a glance.
+
+```{r encoding-missing}
+trial_missing <- gaze_trial |>
+  group_by(participant, trial) |>
+  summarise(
+    n_samples    = n(),
+    n_missing    = sum(is.na(avg_x_px) | is.na(avg_y_px)),
+    prop_missing = n_missing / n_samples,
+    duration_ms  = max(time_ms, na.rm = TRUE) - min(time_ms, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+trial_missing
+
+subject_missing <- trial_missing |>
+  group_by(participant) |>
+  summarise(
+    n_trials             = n(),
+    total_samples        = sum(n_samples, na.rm = TRUE),
+    total_missing        = sum(n_missing, na.rm = TRUE),
+    mean_prop_missing    = mean(prop_missing,   na.rm = TRUE),
+    median_prop_missing  = median(prop_missing, na.rm = TRUE),
+    max_prop_missing     = max(prop_missing,    na.rm = TRUE),
+    n_trials_over_50pct  = sum(prop_missing > 0.50, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+subject_missing
 ```
 
 
@@ -949,6 +994,8 @@ recognition_gaze_trial <- recognition_gaze |>
   group_by(participant, trial) |>
   mutate(time_ms = time_ms - min(time_ms)) |>
   ungroup() |>
+  # Truncate every recognition trial to exactly 5 s, same as encoding.
+  filter(time_ms <= 5000) |>
   select(
     participant,
     trial,
@@ -985,6 +1032,40 @@ stopifnot(
 )
 
 recognition_msg_balance
+```
+
+## Missing-data QC (recognition)
+
+Same definition as encoding: NA samples inside the 5-s trial window, per
+trial and per subject.
+
+```{r recognition-missing}
+recognition_trial_missing <- recognition_gaze_trial |>
+  group_by(participant, trial) |>
+  summarise(
+    n_samples    = n(),
+    n_missing    = sum(is.na(avg_x_px) | is.na(avg_y_px)),
+    prop_missing = n_missing / n_samples,
+    duration_ms  = max(time_ms, na.rm = TRUE) - min(time_ms, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+recognition_trial_missing
+
+recognition_subject_missing <- recognition_trial_missing |>
+  group_by(participant) |>
+  summarise(
+    n_trials             = n(),
+    total_samples        = sum(n_samples, na.rm = TRUE),
+    total_missing        = sum(n_missing, na.rm = TRUE),
+    mean_prop_missing    = mean(prop_missing,   na.rm = TRUE),
+    median_prop_missing  = median(prop_missing, na.rm = TRUE),
+    max_prop_missing     = max(prop_missing,    na.rm = TRUE),
+    n_trials_over_50pct  = sum(prop_missing > 0.50, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+recognition_subject_missing
 ```
 
 ## Preprocess + I-VT
@@ -1286,6 +1367,8 @@ separate.
 | `recognition_accuracy_by_condition.csv` | same broken down by Condition |
 | `recognition_duration_summary.csv` | back-task picture-display duration QC |
 | `validation_encoding.csv`, `validation_recognition.csv` | calibration metrics per validation block |
+| `missing_per_trial_{encoding,recognition}.csv` | per (participant, trial) NA-sample count + prop_missing in the 5-s window |
+| `missing_per_subject_{encoding,recognition}.csv` | per-participant rollup of prop_missing across trials |
 | `fixations_encoding.csv`, `fixations_recognition.csv` | I-VT fixation events |
 | `fixation_aoi_summary_encoding.csv` | per (participant, trial, AOI) dwell |
 | `fixation_summary_recognition.csv` | per-trial recognition fixation count + mean duration, by AOI (old + correct) |
@@ -1309,6 +1392,12 @@ write_csv(recognition_duration_summary, out("recognition_duration_summary.csv"))
 # Eye-tracking quality + events
 write_csv(validation,             out("validation_encoding.csv"))
 write_csv(recognition_validation, out("validation_recognition.csv"))
+
+# Missing-data QC (per trial + per subject, both phases)
+write_csv(trial_missing,                out("missing_per_trial_encoding.csv"))
+write_csv(subject_missing,              out("missing_per_subject_encoding.csv"))
+write_csv(recognition_trial_missing,    out("missing_per_trial_recognition.csv"))
+write_csv(recognition_subject_missing,  out("missing_per_subject_recognition.csv"))
 
 # Fixations
 write_csv(fixations_behav,             out("fixations_encoding.csv"))

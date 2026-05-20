@@ -20,9 +20,15 @@ extract_pid <- function(path) {
   pid
 }
 
-read_behavioral <- function(path) {
+read_behavioral <- function(path, n_practice = 3) {
+  # Encoding starts with `n_practice` practice trials that have no
+  # eye-tracking data — the Tobii msg file's onset events start at the
+  # first *real* trial. Drop those rows here so behavioral trial 1
+  # aligns with ET trial 1; otherwise the (participant, trial) join
+  # silently shifts every Condition/emo/location label.
   read_csv(path, show_col_types = FALSE) |>
     filter(!is.na(Background), !is.na(Object), !is.na(Condition)) |>
+    slice(-seq_len(n_practice)) |>
     mutate(
       participant = extract_pid(path),
       trial       = row_number(),
@@ -158,6 +164,27 @@ extract_msg_events <- function(msg_df) {
     select(participant, system_time_stamp, msg, event, stim)
 }
 
+# Split a `<background>.<object>.<emo>.<location>.<ext>` composite filename
+# into its component columns. Some stims use `_` as the delimiter — those
+# are normalized to `.` first. NA inputs propagate to NA in every output
+# column, so it's safe to call on Composite columns that include "new"-lure
+# rows where no composite was encoded.
+decompose_composite <- function(df, col = "stim",
+                                into = c("background", "object",
+                                         "emo", "location")) {
+  src <- df[[col]]
+  norm <- if_else(
+    !is.na(src) & str_count(src, fixed(".")) < 4L,
+    str_replace_all(coalesce(src, ""), "_", "."),
+    src
+  )
+  parts <- str_split_fixed(coalesce(norm, ""), fixed("."), length(into) + 1L)
+  for (i in seq_along(into)) {
+    df[[into[i]]] <- if_else(is.na(norm), NA_character_, parts[, i])
+  }
+  df
+}
+
 build_trial_stim_encoding <- function(msg_events) {
   msg_events |>
     filter(event == "onset") |>
@@ -166,18 +193,7 @@ build_trial_stim_encoding <- function(msg_events) {
     mutate(trial = row_number()) |>
     ungroup() |>
     select(participant, trial, stim) |>
-    # Normalize "airport_a_n_r.jpeg"-style stims onto a separate column so
-    # `stim` keeps its original disk filename for image-file matching.
-    mutate(stim_split = if_else(
-      str_count(stim, fixed(".")) < 4,
-      str_replace_all(stim, "_", "."),
-      stim
-    )) |>
-    separate_wider_delim(
-      stim_split, delim = ".",
-      names = c("background", "object", "emo", "location", "ext"),
-      cols_remove = TRUE
-    ) |>
+    decompose_composite(col = "stim") |>
     select(participant, trial, stim, background, object, emo, location)
 }
 
@@ -225,7 +241,8 @@ nearest_msg_to_gaze <- function(gaze, msg_events) {
 }
 
 assign_gaze_to_trials <- function(gaze, msg_events, trial_stim,
-                                  decompose_stim = TRUE) {
+                                  decompose_stim = TRUE,
+                                  trial_dur_ms = 5000) {
   # Run the nearest-sample merge per participant — you can't match a
   # message in subject A against a gaze sample in subject B.
   joined <- gaze |>
@@ -253,6 +270,13 @@ assign_gaze_to_trials <- function(gaze, msg_events, trial_stim,
     mutate(time_ms = time_ms - min(time_ms)) |>
     ungroup()
 
+  # Truncate each trial to a fixed window (default 5000 ms). PsychoPy's
+  # back-task pic is nominally on screen for 5 s; trimming here means every
+  # downstream analysis sees the same window.
+  if (!is.null(trial_dur_ms) && is.finite(trial_dur_ms)) {
+    joined <- joined |> filter(time_ms <= trial_dur_ms)
+  }
+
   if (decompose_stim) {
     joined |>
       select(participant, trial, time_ms, msg, event, match_offset_us,
@@ -266,6 +290,50 @@ assign_gaze_to_trials <- function(gaze, msg_events, trial_stim,
              left_x_px, left_y_px, right_x_px, right_y_px,
              avg_x_px, avg_y_px)
   }
+}
+
+# Missing-data QC on the trial-assigned gaze. A sample is "missing" when
+# the binocular average is NA on either axis (i.e., both eyes were lost
+# or one eye dropped and the other never recovered). Returns one row per
+# (participant, trial). Designed to run on the 5-s-truncated `gaze_trial`
+# coming out of assign_gaze_to_trials(), so prop_missing reflects loss
+# within the analyzed window.
+trial_missing <- function(gaze_trial, trial_dur_ms = 5000) {
+  gaze_trial |>
+    group_by(participant, trial) |>
+    summarise(
+      n_samples    = n(),
+      n_missing    = sum(is.na(avg_x_px) | is.na(avg_y_px)),
+      prop_missing = n_missing / n_samples,
+      duration_ms  = suppressWarnings(
+        max(time_ms, na.rm = TRUE) - min(time_ms, na.rm = TRUE)
+      ),
+      .groups = "drop"
+    ) |>
+    mutate(
+      trial_dur_ms = trial_dur_ms,
+      duration_ms  = if_else(is.finite(duration_ms), duration_ms, NA_real_)
+    )
+}
+
+# Per-subject missing-data rollup. Mean / median / max prop_missing across
+# that subject's trials, plus a count of trials with >50% missing — a
+# common threshold for flagging unusable trials.
+subject_missing <- function(trial_missing_df, bad_trial_threshold = 0.50) {
+  trial_missing_df |>
+    group_by(participant) |>
+    summarise(
+      n_trials               = n(),
+      total_samples          = sum(n_samples,  na.rm = TRUE),
+      total_missing          = sum(n_missing,  na.rm = TRUE),
+      mean_prop_missing      = mean(prop_missing,   na.rm = TRUE),
+      median_prop_missing    = median(prop_missing, na.rm = TRUE),
+      max_prop_missing       = max(prop_missing,    na.rm = TRUE),
+      n_trials_over_thresh   = sum(prop_missing > bad_trial_threshold,
+                                   na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    mutate(bad_trial_threshold = bad_trial_threshold)
 }
 
 label_aoi <- function(fix_df) {
