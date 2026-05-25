@@ -266,6 +266,65 @@ One row per `(participant, Condition, AOI)` — `combined_per_background` averag
 | `encoding_mean_fix_duration`, `recognition_mean_fix_duration` | num | mean (across Backgrounds) of within-Background mean fixation duration (ms) |
 | `encoding_mean_total_dwell_time`, `recognition_mean_total_dwell_time` | num | mean (across Backgrounds) of total dwell time in this AOI (ms) |
 
+## `combined_reinstatement.csv`
+One row per encoding↔recognition pair (`participant × Background`), from the Combined tab's **Gaze reinstatement** sub-tab (`eyesim`). Each recognition-phase fixation-density map is compared to the *same* participant + Background encoding map, benchmarked against a within-participant permutation null. Fixations are clipped to the picture box (x: 610–1310, y: 265–815) and smoothed with a Gaussian (`sigma`, default 80 px ≈ 2°) before density estimation. Follows the recognition-scope radio (old+correct vs. all).
+
+| column | type | meaning |
+|---|---|---|
+| `participant`, `Background`, `Condition`, `pair_id` | mixed | grouping keys (`pair_id = "Background::Condition"`) |
+| `eye_sim` | num | observed recognition↔encoding density similarity (Spearman) |
+| `perm_sim` | num | mean similarity under the within-participant permutation null |
+| `eye_sim_diff` | num | observed − permuted similarity in Fisher-z space — the per-pair reinstatement effect |
+
+## `combined_reinstatement_by_condition.csv`
+One row per `Condition` — `combined_reinstatement` rolled up.
+
+| column | type | meaning |
+|---|---|---|
+| `Condition` | chr | grouping key |
+| `mean_eye_sim`, `mean_perm_sim` | num | mean observed / permuted similarity |
+| `mean_eye_sim_diff`, `sd_eye_sim_diff` | num | mean / SD of the Fisher-z reinstatement effect |
+| `n_pairs` | int | number of encoding↔recognition pairs in this Condition |
+
+## `combined_auc_reinstatement.csv`
+One row per `(participant, phase, emo)`, from the Combined tab's **Left/Right AUC** option. Objects were placed Left or Right; AUC is the Wilcoxon–Mann–Whitney probability that a right-placed trial's lateral gaze bias exceeds a left-placed trial's. `0.5` = chance (no spatial reinstatement), `1.0` = perfect. Encoding indexes looking at the object; recognition AUC is the looking-at-nothing reinstatement effect. Lateral bias per trial is `(right − left dwell)/total` (or fixation counts), from Left/Right AOIs only.
+
+| column | type | meaning |
+|---|---|---|
+| `participant`, `phase`, `emo` | mixed | grouping keys (`emo` from the `Condition` label) |
+| `n_trials`, `n_left`, `n_right` | int | trials contributing, split by object side |
+| `auc` | num | Left/Right discriminability AUC (0.5 = chance) |
+| `auc_lo`, `auc_hi` | num | bootstrap 95% CI (2.5 / 97.5 percentile over trials) |
+
+## `combined_auc_by_condition.csv`
+One row per `phase × emo` — `combined_auc_reinstatement` averaged across participants.
+
+| column | type | meaning |
+|---|---|---|
+| `phase`, `emo` | chr | grouping keys |
+| `n_participants` | int | participants contributing to this cell |
+| `mean_auc`, `sd_auc` | num | mean / SD of AUC across participants |
+
+## `object_recognition_trials.csv`
+Per-trial object old/new recognition, from the **Object Memory** tab. Pulled from the object block of the recognition CSV (rows where the object routine ran), separate from the background-recognition rows. Old objects were seen at encoding; new objects are foils.
+
+| column | type | meaning |
+|---|---|---|
+| `participant`, `trial` | mixed | grouping keys |
+| `Object` | chr | object image filename |
+| `Condition` | chr | `<emo>-<location>` for old objects, `foil_<emo>` for foils |
+| `emo` | chr | `neg` / `neu`, derived from `Condition` |
+| `stimulus_status` | chr | `old` (seen at encoding) / `new` (foil) |
+| `response` | chr | participant's old/new judgment |
+| `accuracy` | int | 1 = correct, 0 = incorrect |
+| `List`, `phase` | chr | counterbalance list; `phase = "object_recognition"` |
+
+## `object_recognition_accuracy.csv`
+Per-participant signal-detection object memory (same columns as `recognition_accuracy.csv`): `n_old`, `n_new`, `n_hit`, `n_cr`, `n_fa`, `n_miss`, `accuracy`, `hit_rate`, `fa_rate`, `d_prime`, `c_bias`. Hit/FA rates use the (x+0.5)/(n+1) log-linear correction.
+
+## `object_recognition_accuracy_by_emotion.csv`
+Same columns as above, one row per `(participant, emo)` — object memory split by emotion (negative vs. neutral). For each emotion, hits come from old objects of that emotion and false alarms from foils of that emotion.
+
 ---
 
 ## Notes

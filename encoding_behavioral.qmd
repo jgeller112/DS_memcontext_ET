@@ -37,9 +37,11 @@ runs against TD; flip the paths in the `paths` chunk to run DS.
 | `gaze_trial`, `recognition_gaze_trial` | gaze samples assigned to trials |
 | `fixations`, `recognition_fixations` | I-VT fixation events |
 | `fix_labeled` | encoding fixations + AOI label (Left / Right / Outside) |
-| `recognition_acc`, `recognition_acc_by_condition` | hit/FA/d′/c |
+| `recognition_acc`, `recognition_acc_by_condition` | hit/FA/d′/c (background) |
+| `object_acc`, `object_acc_by_emotion` | object old/new memory: hit/FA/d′/c, overall + by emotion |
 | `validation`, `recognition_validation` | per-validation calibration metrics |
 | `reinstatement` | encoding↔recognition fixation-pattern similarity |
+| `auc_reinstatement` | Left/Right gaze discriminability (AUC) per phase × emotion |
 
 ```{r setup, message=FALSE, warning=FALSE}
 library(tidyverse)
@@ -87,6 +89,7 @@ corresponding folder.
 |---|---|---|
 | `read_behavioral` | encoding PsychoPy CSV | one row per trial |
 | `read_recognition_behavioral` | recognition PsychoPy CSV | one row per back-task trial (≤90) |
+| `read_object_recognition` | recognition PsychoPy CSV | one row per object old/new trial (≤90, practice excluded) |
 | `read_gaze` | Tobii gaze CSV | one row per sample, x/y in px |
 | `read_msg` | Tobii msg CSV | one row per event message |
 | `parse_validation` | a `msg` tibble | one row per validation block, metrics as numeric columns |
@@ -178,8 +181,36 @@ read_recognition_behavioral <- function(path) {
       stimulus_status,
       List,
       response,
-      accuracy, 
+      accuracy,
       phase
+    )
+}
+
+# Object recognition: the recognition CSV's second old/new block. Real object
+# trials run under `object.started`; practice trials use different routines
+# (`object_prac_*`, `object_again`) and never set `object.started`, so this
+# filter excludes practice and keeps the 90 scored trials (60 old / 30 foils).
+# Old objects carry a "<emo>-<location>" Condition; foils carry "foil_<emo>".
+# `emo` is derived from Condition so memory can be split by emotion. The
+# stimulus_status / response / accuracy columns are the same signal-detection
+# fields as background recognition, so recognition_accuracy() works unchanged.
+read_object_recognition <- function(path, n_trials = 90) {
+  read_csv(path, show_col_types = FALSE) |>
+    filter(!is.na(object.started)) |>
+    slice_head(n = n_trials) |>
+    mutate(
+      participant = extract_pid(path),
+      trial       = row_number(),
+      phase       = "object_recognition",
+      emo = case_when(
+        str_detect(Condition, "neg") ~ "neg",
+        str_detect(Condition, "neu") ~ "neu",
+        TRUE                         ~ NA_character_
+      )
+    ) |>
+    select(
+      participant, trial, Object, Condition, emo,
+      stimulus_status, List, response, accuracy, phase
     )
 }
 
@@ -917,6 +948,52 @@ recognition_duration_summary <- recognition_durations |>
 recognition_duration_summary
 ```
 
+## Object recognition memory
+
+The recognition session also tests **object** old/new memory in a separate
+block (objects shown alone — no eye tracking was recorded here). Old objects
+were studied at encoding; foils are new. We read that block with
+`read_object_recognition()` (practice trials excluded — see the reader) and
+run the same signal-detection summary, overall and split by emotion. For each
+emotion, hits come from old objects of that emotion and false alarms from
+foils of that emotion.
+
+```{r object-recognition-behavioral}
+object_recognition <- map(recognition_behavioral_files, read_object_recognition) |>
+  list_rbind()
+
+object_recognition
+```
+
+```{r object-recognition-accuracy}
+object_acc <- recognition_accuracy(object_recognition)
+object_acc
+
+object_acc_by_emotion <- recognition_accuracy(
+  object_recognition, groupvars = c("participant", "emo")
+)
+object_acc_by_emotion
+```
+
+```{r object-recognition-plot, fig.width = 6, fig.height = 4.5}
+# Object-memory sensitivity (d') by emotion, one dot per participant. The
+# emotional-memory literature predicts better memory for negative objects.
+object_acc_by_emotion |>
+  filter(!is.na(emo), is.finite(d_prime)) |>
+  ggplot(aes(x = emo, y = d_prime, fill = emo)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, color = "black",
+               linewidth = 0.6, width = 0.6) +
+  geom_point(shape = 21, color = "black", size = 2.6, stroke = 0.5,
+             alpha = 0.85, show.legend = FALSE,
+             position = position_jitter(width = 0.12, height = 0)) +
+  theme_minimal(base_size = 14) +
+  theme(axis.title = element_text(face = "bold"),
+        axis.text  = element_text(face = "bold")) +
+  labs(x = "Emotion", y = "Object memory (d′)",
+       title = "Object recognition memory by emotion")
+```
+
 ## Eye-tracking data
 
 ```{r recognition-load-et}
@@ -1407,6 +1484,114 @@ reinstatement |>
   )
 ```
 
+## Gaze reinstatement (Left/Right AUC)
+
+`template_similarity()` above correlates the *whole* 2-D fixation-density map,
+which is dominated by structure shared across maps (center bias, the picture
+box). The emotional-memory eye-tracking literature this study follows instead
+quantifies reinstatement on the **one dimension the design manipulates** —
+whether the object sat **Left** or **Right** of the scene — using the area
+under the ROC curve (AUC). If the gaze pattern carries that spatial trace,
+fixations on right-placed trials sit further right than on left-placed trials.
+
+For each trial we score the lateral gaze bias as
+`(right − left dwell) / total` over the Left/Right AOIs (in `[-1, 1]`), then,
+per `(participant, phase, emo)`, compute the Wilcoxon–Mann–Whitney AUC for
+discriminating right- from left-placed trials. **AUC = 0.5 is chance** (no
+spatial reinstatement), 1.0 perfect. Encoding AUC indexes perceptual
+looking-at-the-object; recognition AUC is the looking-at-nothing reinstatement
+measure. A trial bootstrap gives a 95% CI per cell. This is the 1-D
+(horizontal) reduction of the literature's 2-D-KDE AUC — appropriate here
+because left vs. right is the only spatial manipulation.
+
+```{r auc-per-trial}
+# Per-trial lateral bias on the picture AOIs, with emo / location split out
+# of the Condition label ("<emo>-<location>").
+auc_per_trial <- fixations_long |>
+  filter(AOI %in% c("Left", "Right"),
+         !is.na(Condition), str_detect(Condition, "-")) |>
+  separate_wider_delim(Condition, delim = "-",
+                       names = c("emo", "location"),
+                       cols_remove = FALSE, too_many = "merge") |>
+  group_by(participant, phase, emo, location, Background) |>
+  summarise(
+    dwell_left  = sum(duration[AOI == "Left"],  na.rm = TRUE),
+    dwell_right = sum(duration[AOI == "Right"], na.rm = TRUE),
+    .groups     = "drop"
+  ) |>
+  mutate(total = dwell_left + dwell_right,
+         score = (dwell_right - dwell_left) / total) |>
+  filter(total > 0, location %in% c("left", "right"))
+```
+
+```{r auc-reinstatement}
+# Wilcoxon-Mann-Whitney AUC = P(score_right > score_left). Positive class =
+# object on the right. NA when a cell lacks both sides.
+auc_mw <- function(score, pos) {
+  keep <- is.finite(score); score <- score[keep]; pos <- pos[keep]
+  np <- sum(pos); nn <- sum(!pos)
+  if (np == 0 || nn == 0) return(NA_real_)
+  r <- rank(score)
+  (sum(r[pos]) - np * (np + 1) / 2) / (np * nn)
+}
+
+set.seed(1234)
+auc_reinstatement <- auc_per_trial |>
+  group_by(participant, phase, emo) |>
+  group_modify(function(d, key) {
+    pos <- d$location == "right"
+    bs  <- replicate(1000, {
+      i <- sample(nrow(d), replace = TRUE)
+      auc_mw(d$score[i], pos[i])
+    })
+    tibble(
+      n_trials = nrow(d), n_left = sum(!pos), n_right = sum(pos),
+      auc      = auc_mw(d$score, pos),
+      auc_lo   = unname(quantile(bs, 0.025, na.rm = TRUE)),
+      auc_hi   = unname(quantile(bs, 0.975, na.rm = TRUE))
+    )
+  }) |>
+  ungroup()
+
+auc_reinstatement
+```
+
+```{r auc-summary}
+# Mean AUC across participants, per phase x emotion. Recognition rows above
+# 0.5 are the reinstatement effect.
+auc_by_condition <- auc_reinstatement |>
+  group_by(phase, emo) |>
+  summarise(
+    n_participants = n_distinct(participant),
+    mean_auc       = mean(auc, na.rm = TRUE),
+    sd_auc         = sd(auc,   na.rm = TRUE),
+    .groups        = "drop"
+  )
+
+auc_by_condition
+```
+
+```{r auc-plot, fig.width = 8, fig.height = 4.5}
+auc_reinstatement |>
+  filter(is.finite(auc)) |>
+  mutate(phase = factor(phase, levels = c("encoding", "recognition"))) |>
+  ggplot(aes(x = emo, y = auc, fill = emo)) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "grey40") +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, color = "black",
+               linewidth = 0.6, width = 0.6) +
+  geom_point(shape = 21, color = "black", size = 2.4, stroke = 0.5,
+             alpha = 0.85, show.legend = FALSE,
+             position = position_jitter(width = 0.12, height = 0)) +
+  facet_wrap(~ phase) +
+  ylim(0, 1) +
+  theme_minimal(base_size = 14) +
+  theme(axis.title = element_text(face = "bold"),
+        axis.text  = element_text(face = "bold"),
+        strip.text = element_text(face = "bold")) +
+  labs(x = "Emotion", y = "Left/Right discriminability (AUC)",
+       title = "Gaze reinstatement — Left/Right AUC (0.5 = chance)")
+```
+
 # Write outputs
 
 Persist the summary tables to `output/<group>/` as CSVs so they can be
@@ -1418,9 +1603,12 @@ separate.
 |---|---|
 | `encoding_behavioral.csv` | per-trial encoding behavioral table |
 | `recognition_behavioral.csv` | per-trial recognition behavioral table |
-| `recognition_accuracy.csv` | HR / FAR / accuracy / d′ / c per participant |
+| `recognition_accuracy.csv` | HR / FAR / accuracy / d′ / c per participant (background) |
 | `recognition_accuracy_by_condition.csv` | same broken down by Condition |
 | `recognition_duration_summary.csv` | back-task picture-display duration QC |
+| `object_recognition_behavioral.csv` | per-trial object old/new recognition |
+| `object_recognition_accuracy.csv` | object HR / FAR / accuracy / d′ / c per participant |
+| `object_recognition_accuracy_by_emotion.csv` | object memory split by emotion (neg / neu) |
 | `validation_encoding.csv`, `validation_recognition.csv` | calibration metrics per validation block |
 | `missing_per_trial_{encoding,recognition}.csv` | per (participant, trial) NA-sample count + prop_missing in the 5-s window |
 | `missing_per_subject_{encoding,recognition}.csv` | per-participant rollup of prop_missing across trials |
@@ -1433,6 +1621,8 @@ separate.
 | `emo_dwell_encoding.csv` | object-side dwell × emotion |
 | `reinstatement.csv` | per-pair encoding↔recognition similarity |
 | `reinstatement_by_condition.csv` | reinstatement summary × Condition |
+| `auc_reinstatement.csv` | Left/Right gaze AUC per (participant × phase × emo) + bootstrap CI |
+| `auc_reinstatement_by_condition.csv` | mean AUC across participants × phase × emotion |
 
 ```{r write-outputs}
 out <- function(name) file.path(output_dir, paste0(group_label, "_", name))
@@ -1445,6 +1635,11 @@ write_csv(recognition, out("recognition_behavioral.csv"))
 write_csv(recognition_acc,              out("recognition_accuracy.csv"))
 write_csv(recognition_acc_by_condition, out("recognition_accuracy_by_condition.csv"))
 write_csv(recognition_duration_summary, out("recognition_duration_summary.csv"))
+
+# Object recognition memory
+write_csv(object_recognition,    out("object_recognition_behavioral.csv"))
+write_csv(object_acc,            out("object_recognition_accuracy.csv"))
+write_csv(object_acc_by_emotion, out("object_recognition_accuracy_by_emotion.csv"))
 
 # Eye-tracking quality + events
 write_csv(validation,             out("validation_encoding.csv"))
@@ -1482,6 +1677,10 @@ reinstatement_by_condition <- reinstatement |>
     .groups = "drop"
   )
 write_csv(reinstatement_by_condition, out("reinstatement_by_condition.csv"))
+
+# Left/Right AUC reinstatement
+write_csv(auc_reinstatement,  out("auc_reinstatement.csv"))
+write_csv(auc_by_condition,   out("auc_reinstatement_by_condition.csv"))
 
 list.files(output_dir)
 ```

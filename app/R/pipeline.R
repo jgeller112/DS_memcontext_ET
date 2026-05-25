@@ -55,6 +55,38 @@ read_recognition_behavioral <- function(path) {
     )
 }
 
+# The recognition CSV holds a second old/new block: object recognition. Those
+# rows are the ones where the *real* object routine ran (`object.started`
+# populated) and are disjoint from the background-recognition rows. Practice
+# trials are automatically excluded: they run under different routine columns
+# (`object_prac_*`, `object_again`) and never set `object.started`, so this
+# filter keeps the 90 scored trials only (verified: 60 old / 30 foils, no
+# practice overlap). Old objects were seen at encoding and carry a
+# "<emo>-<location>" Condition; new objects are foils with Condition
+# "foil_<emo>". `emo` (neg / neu) is derived from Condition so memory can be
+# broken down by emotion. stimulus_status / response / accuracy are the same
+# signal-detection columns used for background recognition, so
+# recognition_accuracy() works unchanged on this output.
+read_object_recognition <- function(path, n_trials = 90) {
+  read_csv(path, show_col_types = FALSE) |>
+    filter(!is.na(object.started)) |>
+    slice_head(n = n_trials) |>
+    mutate(
+      participant = extract_pid(path),
+      trial       = row_number(),
+      phase       = "object_recognition",
+      emo = case_when(
+        str_detect(Condition, "neg") ~ "neg",
+        str_detect(Condition, "neu") ~ "neu",
+        TRUE                         ~ NA_character_
+      )
+    ) |>
+    select(
+      participant, trial, Object, Condition, emo,
+      stimulus_status, List, response, accuracy, phase
+    )
+}
+
 read_gaze <- function(path) {
   read_csv(path, show_col_types = FALSE) |>
     select(
@@ -503,5 +535,165 @@ summarise_per_condition <- function(fixations_long) {
       values_from = c(n_backgrounds, mean_n_fix,
                       mean_fix_duration, mean_total_dwell_time),
       names_glue  = "{phase}_{.value}"
+    )
+}
+
+# Gaze reinstatement (eyesim). Tests whether the recognition-phase fixation
+# pattern reinstates the encoding-phase pattern for the same Background
+# *within participant*. Mirrors the qmd eyesim workflow:
+#   1. eye_table() keyed on participant + phase + Background + Condition,
+#      with fixations clipped to the picture box (relative coords).
+#   2. density_by() — Gaussian fixation-density map per group (sigma px).
+#   3. template_similarity() comparing each recognition density map to the
+#      *same* participant+Background encoding map (match_on = pair_id =
+#      "Background::Condition"), benchmarked against a within-participant
+#      permutation null. `eye_sim_diff` is the observed-minus-permuted
+#      similarity in Fisher-z space — the per-pair reinstatement effect.
+# `fixations_long` must come from build_fixations_long(); already restricted
+# to Backgrounds present in both phases. Returns the per-pair similarity
+# table (eye_sim, perm_sim, eye_sim_diff + grouping columns).
+run_reinstatement <- function(fixations_long, sigma = 80,
+                              permutations = 1000, seed = 1234,
+                              method = "spearman") {
+  if (!requireNamespace("eyesim", quietly = TRUE)) {
+    stop("eyesim is not installed. Install with: remotes::install_github('bbuchsbaum/eyesim')")
+  }
+  fixations_long_eye <- fixations_long |>
+    mutate(pair_id = paste(Background, Condition, sep = "::"))
+
+  eyetab <- eyesim::eye_table(
+    x = "x", y = "y",
+    duration = "duration", onset = "onset",
+    groupvar = c("participant", "phase", "Background", "Condition", "pair_id"),
+    data    = fixations_long_eye,
+    clip_bounds     = c(pic_x_min, pic_x_max, pic_y_min, pic_y_max),
+    relative_coords = TRUE
+  )
+
+  eyedens <- eyesim::density_by(
+    eyetab,
+    groups  = c("participant", "phase", "Background", "Condition", "pair_id"),
+    sigma   = sigma,
+    xbounds = c(pic_x_min, pic_x_max),
+    ybounds = c(pic_y_min, pic_y_max)
+  )
+
+  enc_dens <- eyedens |> filter(phase == "encoding")
+  rec_dens <- eyedens |> filter(phase == "recognition")
+
+  set.seed(seed)
+  eyesim::template_similarity(
+    ref_tab      = enc_dens,
+    source_tab   = rec_dens,
+    match_on     = "pair_id",   # recognition→encoding for same Background
+    permute_on   = "participant",
+    method       = method,
+    permutations = permutations
+  )
+}
+
+# Roll the per-pair reinstatement table up to one row per Condition: mean
+# observed similarity, mean permuted similarity, and the mean/SD of the
+# Fisher-z difference (the corrected reinstatement effect).
+reinstatement_by_condition <- function(reinstatement) {
+  reinstatement |>
+    group_by(Condition) |>
+    summarise(
+      mean_eye_sim      = mean(eye_sim,      na.rm = TRUE),
+      mean_perm_sim     = mean(perm_sim,     na.rm = TRUE),
+      mean_eye_sim_diff = mean(eye_sim_diff, na.rm = TRUE),
+      sd_eye_sim_diff   = sd(eye_sim_diff,   na.rm = TRUE),
+      n_pairs           = n(),
+      .groups           = "drop"
+    )
+}
+
+# Gaze reinstatement via Left/Right discriminability (AUC) — the approach
+# used in the emotional-memory eye-tracking literature this study is modeled
+# on. Objects were placed Left or Right of the scene; if the gaze pattern
+# carries that spatial information, fixations on right-placed trials sit
+# further right than on left-placed trials. For each (participant, phase,
+# emo) we score every trial's lateral gaze bias and compute the AUC for
+# discriminating right- from left-placed trials (Wilcoxon–Mann–Whitney
+# statistic = P(score_right > score_left)). AUC = 0.5 is chance (no spatial
+# reinstatement), 1.0 is perfect separation. Encoding AUC indexes perceptual
+# looking-at-the-object; recognition AUC is the reinstatement measure.
+#
+# `bias` picks the per-trial lateral score: "dwell" = (right−left dwell time)
+# / total, "count" = same on fixation counts; both in [-1, 1]. A trial's side
+# (location) comes from the `Condition` label ("<emo>-<location>"). Bootstrap
+# over trials gives a 95% CI per cell. Note: this is the 1-D (horizontal)
+# reduction of the paper's 2-D-KDE AUC — appropriate here because the only
+# spatial manipulation is left vs. right.
+run_auc_reinstatement <- function(fixations_long,
+                                  bias = c("dwell", "count"),
+                                  boot = 1000, seed = 1234) {
+  bias <- match.arg(bias)
+  set.seed(seed)
+
+  per_trial <- fixations_long |>
+    filter(AOI %in% c("Left", "Right"),
+           !is.na(Condition), str_detect(Condition, "-")) |>
+    separate_wider_delim(Condition, delim = "-",
+                         names = c("emo", "location"),
+                         cols_remove = FALSE, too_many = "merge") |>
+    group_by(participant, phase, emo, location, Background) |>
+    summarise(
+      dwell_left  = sum(duration[AOI == "Left"],  na.rm = TRUE),
+      dwell_right = sum(duration[AOI == "Right"], na.rm = TRUE),
+      n_left      = sum(AOI == "Left"),
+      n_right     = sum(AOI == "Right"),
+      .groups     = "drop"
+    ) |>
+    mutate(
+      total = if (bias == "dwell") dwell_left + dwell_right else n_left + n_right,
+      score = if (bias == "dwell")
+        (dwell_right - dwell_left) / total
+      else
+        (n_right - n_left) / total
+    ) |>
+    filter(total > 0, location %in% c("left", "right"))
+
+  # Wilcoxon–Mann–Whitney AUC; positive class = object on the right.
+  auc_mw <- function(score, pos) {
+    keep  <- is.finite(score)
+    score <- score[keep]; pos <- pos[keep]
+    np <- sum(pos); nn <- sum(!pos)
+    if (np == 0 || nn == 0) return(NA_real_)
+    r <- rank(score)
+    (sum(r[pos]) - np * (np + 1) / 2) / (np * nn)
+  }
+
+  per_trial |>
+    group_by(participant, phase, emo) |>
+    group_modify(function(d, key) {
+      pos <- d$location == "right"
+      auc <- auc_mw(d$score, pos)
+      bs  <- replicate(boot, {
+        i <- sample(nrow(d), replace = TRUE)
+        auc_mw(d$score[i], pos[i])
+      })
+      tibble(
+        n_trials = nrow(d),
+        n_left   = sum(!pos),
+        n_right  = sum(pos),
+        auc      = auc,
+        auc_lo   = unname(quantile(bs, 0.025, na.rm = TRUE)),
+        auc_hi   = unname(quantile(bs, 0.975, na.rm = TRUE))
+      )
+    }) |>
+    ungroup()
+}
+
+# Roll the per-(participant, phase, emo) AUC table up to one row per
+# phase × emo: number of participants and the mean/SD AUC across them.
+auc_by_condition <- function(auc_tbl) {
+  auc_tbl |>
+    group_by(phase, emo) |>
+    summarise(
+      n_participants = n_distinct(participant),
+      mean_auc       = mean(auc, na.rm = TRUE),
+      sd_auc         = sd(auc,   na.rm = TRUE),
+      .groups        = "drop"
     )
 }
