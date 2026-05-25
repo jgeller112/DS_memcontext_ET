@@ -1705,7 +1705,17 @@ objectServer <- function(id) {
 
 ui <- page_navbar(
   title = "DS-Mem-Emo",
-  theme = bs_theme(version = 5),
+  # Boston College colors: maroon (#8C2232) navbar + primary controls, gold
+  # (#C2A14D) accents. Content stays on a near-white background so tables and
+  # plots remain readable; bslib auto-picks light navbar text on the maroon bg.
+  theme = bs_theme(
+    version     = 5,
+    bg          = "#FFFFFF",
+    fg          = "#23282B",
+    primary     = "#8C2232",
+    secondary   = "#C2A14D",
+    "navbar-bg" = "#8C2232"
+  ),
   # Each tab is a tall stack of cards (uploads, plots, viewers, tables), so
   # let the page scroll normally. The default (fillable = TRUE) makes the
   # active panel a fixed-height fill container, which compresses the cards
