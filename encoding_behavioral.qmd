@@ -48,6 +48,53 @@ library(tidyverse)
 library(here)
 ```
 
+## Get the data (OSF)
+
+Raw participant files live on OSF, not in the repo (`Data/` is gitignored).
+This chunk pulls them into `Data/` with [`osfr`](https://docs.ropensci.org/osfr/)
+so the pipeline is reproducible from a clean checkout. It only runs when
+`Data/TD/` is missing, so re-renders don't re-download.
+
+The data live in OSF component [`64a2j`](https://osf.io/64a2j/), which is
+**public**, so no authentication is needed. (If you later make it private,
+create a [personal access token](https://osf.io/settings/tokens) and set it as
+the `OSF_PAT` environment variable before rendering — `osfr` picks it up
+automatically.) The download mirrors the component's top-level folders
+(`DS/`, `TD/`) into `Data/`, matching the layout `## Paths` expects.
+
+We pull files **one at a time** rather than as folder zips: OSF's
+"download folder as zip" endpoint is unreliable (it can return a truncated
+archive that fails to extract), so `dl_tree()` walks the OSF tree and fetches
+each file individually, recreating the directory structure under `Data/`.
+
+```{r osf-download, eval = !dir.exists(here("Data", "TD"))}
+library(osfr)
+
+osf_node <- "64a2j"   # public OSF component
+
+# kind ("file"/"folder") for each row of an osf_ls_files() result.
+osf_kind <- function(tbl) {
+  vapply(tbl$meta, function(m) m$attributes$kind, character(1))
+}
+
+# Recursively download an OSF folder listing into local_dir, file by file.
+dl_tree <- function(tbl, local_dir) {
+  dir.create(local_dir, recursive = TRUE, showWarnings = FALSE)
+  kind <- osf_kind(tbl)
+  for (i in seq_len(nrow(tbl))) {
+    if (kind[i] == "folder") {
+      dl_tree(osf_ls_files(tbl[i, ], n_max = Inf),
+              file.path(local_dir, tbl$name[i]))
+    } else {
+      osf_download(tbl[i, ], path = local_dir, conflicts = "skip")
+    }
+  }
+}
+
+dir.create(here("Data"), recursive = TRUE, showWarnings = FALSE)
+dl_tree(osf_ls_files(osf_retrieve_node(osf_node), n_max = Inf), here("Data"))
+```
+
 ## Paths
 
 Each data type lives in its own folder. Files are matched by participant ID

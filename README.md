@@ -22,7 +22,7 @@ The repo has two faces:
 ```r
 install.packages(c(
   "shiny", "bslib", "DT", "ggplot2", "ggrain", "markdown",
-  "tidyverse", "here", "kollaR", "jpeg", "png"
+  "tidyverse", "here", "kollaR", "jpeg", "png", "osfr"
 ))
 # eyesim is GitHub-only:
 remotes::install_github("bbuchsbaum/eyesim")
