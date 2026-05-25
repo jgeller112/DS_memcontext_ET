@@ -488,7 +488,7 @@ phase_outputs_recognition <- function(ns_id) {
   ns <- NS(ns_id)
   tagList(
     card(
-      card_header("Recognition trial scope"),
+      card_header("Background recognition trial scope"),
       radioButtons(ns("scope"), NULL,
         choices = c(
           "Old + correct (hits only)" = "old_correct",
@@ -1036,7 +1036,7 @@ recognitionServer <- function(id) {
               .groups    = "drop"
             )
           rv$status <- sprintf(
-            "Recognition: %d trials, %d participants.",
+            "Background recognition: %d trials, %d participants.",
             nrow(rv$behavioral),
             n_distinct(rv$behavioral$participant)
           )
@@ -1375,15 +1375,15 @@ combined_outputs_ui <- function(ns_id) {
     card_header("Combined encoding + recognition"),
     tags$p(
       "Restricted to Backgrounds that appear in ",
-      tags$b("both"), " phases per participant. Recognition scope is ",
-      "controlled by the radio below."
+      tags$b("both"), " phases per participant. Background-recognition scope ",
+      "is controlled by the radio below."
     ),
     tags$p(
       "Run the encoding ", tags$b("Detect fixations"), " step and the ",
       "recognition ", tags$b("Detect fixations"), " step first. Tables ",
       "below populate automatically."
     ),
-    radioButtons(ns("rec_scope"), "Recognition scope",
+    radioButtons(ns("rec_scope"), "Background-recognition scope",
       choices = c(
         "Old + correct (hits only)" = "old_correct",
         "All trials"                = "all"
@@ -1718,8 +1718,8 @@ ui <- page_navbar(
     phase_outputs_encoding("enc")
   ),
   nav_panel(
-    "Recognition",
-    phase_ui("rec", "Recognition"),
+    "Background Recognition",
+    phase_ui("rec", "Background Recognition"),
     phase_outputs_recognition("rec")
   ),
   nav_panel(
@@ -1736,7 +1736,7 @@ ui <- page_navbar(
     card(
       card_header("How to use"),
       tags$ol(
-        tags$li("Pick the Encoding or Recognition tab."),
+        tags$li("Pick the Encoding or Background Recognition tab."),
         tags$li("Upload the behavioral CSV(s) (PsychoPy output)."),
         tags$li(
           "Upload the matching ", tags$code("*_gaze.csv"),
