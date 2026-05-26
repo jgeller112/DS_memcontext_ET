@@ -1541,15 +1541,16 @@ whether the object sat **Left** or **Right** of the scene — using the area
 under the ROC curve (AUC). If the gaze pattern carries that spatial trace,
 fixations on right-placed trials sit further right than on left-placed trials.
 
-For each trial we score the lateral gaze bias as
+For each trial we score the rightward gaze bias as
 `(right − left dwell) / total` over the Left/Right AOIs (in `[-1, 1]`), then,
-**per `(participant, phase, emo)`**, take the Wilcoxon–Mann–Whitney AUC
-discriminating object-on-RIGHT from object-on-LEFT trials by that score —
-`P(score_right > score_left)`. **AUC = 0.5 is chance** (no spatial
-reinstatement), 1.0 perfect. Encoding sits near ceiling (looking at the
-on-screen object); recognition above 0.5 is the looking-at-nothing
-reinstatement. With one AUC per participant we test against chance *across
-participants* (one-sample t), not a per-cell bootstrap.
+**per `(participant, phase, emo)`**, take the AUC discriminating
+object-on-RIGHT from object-on-LEFT trials by that score —
+`P(score_right > score_left)`. The AUC is **right-referenced** (positive class
+= object-on-right): **0.5 = chance**, **> 0.5** = gaze runs toward the object's
+side (reinstatement), **< 0.5** = toward the opposite side. Encoding sits near
+ceiling (looking at the on-screen object); recognition above 0.5 is the
+looking-at-nothing reinstatement. With one AUC per participant we test against
+chance *across participants* (one-sample t), not a per-cell bootstrap.
 
 ```{r auc-per-trial}
 # Per-trial lateral bias on the picture AOIs, with emo / location split out
@@ -1635,8 +1636,9 @@ auc_reinstatement |>
   theme(axis.title = element_text(face = "bold"),
         axis.text  = element_text(face = "bold"),
         strip.text = element_text(face = "bold")) +
-  labs(x = "Emotion", y = "Left/Right discriminability (AUC)",
-       title = "Gaze reinstatement — Left/Right AUC (0.5 = chance)")
+  labs(x = "Emotion",
+       y = "AUC: rightward-gaze bias predicts object-on-right",
+       title = "Gaze reinstatement — Left/Right AUC (right-referenced; 0.5 = chance)")
 ```
 
 # Write outputs

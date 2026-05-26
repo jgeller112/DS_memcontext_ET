@@ -274,8 +274,8 @@ auc_plot <- function(auc_tbl) {
     ) +
     ggplot2::labs(
       x = "Emotion",
-      y = "Left/Right discriminability (AUC)",
-      title = "Gaze reinstatement — Left/Right AUC (0.5 = chance)"
+      y = "AUC: rightward-gaze bias predicts object-on-right",
+      title = "Gaze reinstatement — Left/Right AUC (right-referenced; 0.5 = chance)"
     )
 }
 
@@ -1448,13 +1448,15 @@ combined_outputs_ui <- function(ns_id) {
           "Alternative metric used in the emotional-memory eye-tracking ",
           "literature this study follows. Objects were placed ",
           tags$b("Left"), " or ", tags$b("Right"), ". Per trial the ",
-          tags$b("lateral gaze bias"), " (right − left dwell over the picture ",
-          "AOIs) is scored; per participant the AUC (Wilcoxon–Mann–Whitney) ",
-          "measures how well that bias separates right- from left-placed ",
-          "trials. ", tags$b("0.5 = chance"), " (no spatial reinstatement), ",
-          "1.0 = perfect. Encoding indexes looking at the object; recognition ",
-          "above 0.5 is the reinstatement effect. The by-condition table tests ",
-          "the AUC against 0.5 across participants (one-sample t)."
+          tags$b("rightward gaze bias"), " (right − left dwell over the ",
+          "picture AOIs) is scored; per participant the AUC measures how well ",
+          "that bias separates right- from left-placed trials. The AUC is ",
+          tags$b("right-referenced"), " (positive class = object-on-right): ",
+          tags$b("0.5 = chance"), ", > 0.5 = gaze runs toward the object's ",
+          "side (reinstatement), < 0.5 = toward the opposite side. Encoding ",
+          "indexes looking at the object; recognition above 0.5 is the ",
+          "reinstatement effect. The by-condition table tests the AUC against ",
+          "0.5 across participants (one-sample t)."
         ),
         radioButtons(ns("auc_bias"), "Per-trial lateral score",
           choices = c(

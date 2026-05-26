@@ -613,11 +613,13 @@ reinstatement_by_condition <- function(reinstatement) {
 # gaze bias from the picture AOIs: `(right - left dwell) / total` in [-1, 1]
 # (or the same on fixation counts). Per (participant, phase, emo), the AUC is
 # the Wilcoxon-Mann-Whitney statistic discriminating object-on-RIGHT from
-# object-on-LEFT trials by that score = P(score_right > score_left). 0.5 =
-# chance (no spatial reinstatement), 1 = perfect. Encoding sits near ceiling
-# (looking at the on-screen object); recognition above 0.5 is the
-# looking-at-nothing reinstatement. One AUC per participant; test against
-# chance ACROSS participants with auc_by_condition().
+# object-on-LEFT trials by that score = P(score_right > score_left). The AUC
+# is RIGHT-REFERENCED: the positive class is object-on-right and the score is
+# rightward gaze bias, so AUC > 0.5 means gaze runs *toward* the object's side
+# (reinstatement), AUC < 0.5 means it runs to the opposite side. 0.5 = chance,
+# 1 = perfect. Encoding sits near ceiling (looking at the on-screen object);
+# recognition above 0.5 is the looking-at-nothing reinstatement. One AUC per
+# participant; test against chance ACROSS participants with auc_by_condition().
 run_auc_reinstatement <- function(fixations_long, bias = c("dwell", "count")) {
   bias <- match.arg(bias)
 
@@ -644,7 +646,8 @@ run_auc_reinstatement <- function(fixations_long, bias = c("dwell", "count")) {
     ) |>
     filter(total > 0, location %in% c("left", "right"))
 
-  # Wilcoxon-Mann-Whitney AUC across trials; positive class = object on right.
+  # Right-referenced AUC (Wilcoxon-Mann-Whitney): positive class = object on
+  # the right, `pos` flags right-placed trials. AUC = P(score_right > score_left).
   auc_mw <- function(score, pos) {
     keep <- is.finite(score); score <- score[keep]; pos <- pos[keep]
     np <- sum(pos); nn <- sum(!pos)

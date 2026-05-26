@@ -11,13 +11,17 @@ The repo has two faces:
 
 | | what it is |
 |---|---|
-| **`encoding_behavioral.qmd`** | Quarto pipeline — full reproducible workflow from raw files → behavioral tables → I-VT fixations → AOI summaries → eyesim gaze reinstatement |
-| **`app/`** | Shiny app wrapping the behavioral + ET summaries with browser uploads, AOI fixation viewer, heatmaps, and box plots |
+| **`encoding_behavioral.qmd`** | Quarto pipeline — full reproducible workflow from raw files → behavioral tables → I-VT fixations → AOI summaries → gaze reinstatement (eyesim density similarity **and** Left/Right AUC) → object-recognition memory. Can pull the raw data straight from OSF via `osfr`. |
+| **`app/`** | Shiny app wrapping the behavioral + ET summaries: browser uploads, AOI fixation viewer, heatmaps, box plots, encoding↔recognition gaze reinstatement, and object-memory d′ |
 | **`app/DATA_DICTIONARY.md`** | Column-level docs for every CSV the pipeline writes |
 
-`Data/` is intentionally not tracked — participant files stay local.
+`Data/` is intentionally not tracked — participant files stay local. The qmd's
+"Get the data (OSF)" chunk downloads them into `Data/` from the (public) OSF
+component [`64a2j`](https://osf.io/64a2j/) when they're absent.
 
 ## Setup
+
+Install the packages directly:
 
 ```r
 install.packages(c(
@@ -28,18 +32,40 @@ install.packages(c(
 remotes::install_github("bbuchsbaum/eyesim")
 ```
 
+…or restore the pinned versions the app was built with (the `app/` project is
+`renv`-managed, lockfile committed):
+
+```r
+setwd("app"); renv::restore()
+```
+
 ## Run the app locally
 
 ```r
 shiny::runApp("app")
 ```
 
-The app expects three file types per phase (Encoding tab / Recognition tab):
+Tabs:
+
+- **Encoding** / **Background Recognition** — upload the behavioral CSV(s),
+  the `*_gaze.csv`, and `*_msg.csv` for that phase, then run behavioral
+  tables, validation QC, or the full I-VT fixation pipeline.
+- **Object Memory** — upload the recognition behavioral CSV(s); computes
+  object old/new memory (accuracy, hit/FA, d′, criterion) overall and by
+  emotion. Behavioral only — object recognition had no eye-tracking.
+- **Combined** — encoding↔recognition fixation summaries plus two
+  gaze-reinstatement views: **Reinstatement (eyesim)** (density-map
+  similarity vs a permutation null) and **Reinstatement (AUC)** (Left/Right
+  discriminability, right-referenced, 0.5 = chance).
+
+Each phase tab expects three file types:
 - behavioral CSVs (PsychoPy output)
 - `*_gaze.csv` (Tobii gaze samples)
 - `*_msg.csv` (Tobii trial-event messages)
 
-Participant ID is parsed from the filename as `^DS\d+[_-]\d+`.
+Participant ID is parsed from the filename as `^DS\d+[_-]\d+` (so it must match
+across phases — e.g. encoding and recognition files for the same person need
+the same `DS…` prefix).
 
 ## Expected folder layout (local)
 

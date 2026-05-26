@@ -287,7 +287,7 @@ One row per `Condition` — `combined_reinstatement` rolled up.
 | `n_pairs` | int | number of encoding↔recognition pairs in this Condition |
 
 ## `combined_auc_reinstatement.csv`
-One row per `(participant, phase, emo)`, from the Combined tab's **Left/Right AUC** option. Objects were placed Left or Right. Per trial, the lateral gaze bias `(right − left dwell)/total` (or fixation counts) is scored over the Left/Right picture AOIs. Per participant, the AUC is the Wilcoxon–Mann–Whitney statistic discriminating object-on-right from object-on-left trials by that score — `P(score_right > score_left)`. `0.5` = chance (no spatial reinstatement), `1.0` = perfect. Encoding indexes looking at the object; recognition AUC is the looking-at-nothing reinstatement effect.
+One row per `(participant, phase, emo)`, from the Combined tab's **Left/Right AUC** option. Objects were placed Left or Right. Per trial, the rightward gaze bias `(right − left dwell)/total` (or fixation counts) is scored over the Left/Right picture AOIs. Per participant, the AUC discriminates object-on-right from object-on-left trials by that score — `P(score_right > score_left)`. The AUC is **right-referenced** (positive class = object-on-right): `0.5` = chance, `> 0.5` = gaze runs toward the object's side (reinstatement), `< 0.5` = toward the opposite side, `1.0` = perfect. Encoding indexes looking at the object; recognition AUC is the looking-at-nothing reinstatement effect.
 
 | column | type | meaning |
 |---|---|---|
