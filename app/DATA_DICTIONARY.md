@@ -287,23 +287,25 @@ One row per `Condition` — `combined_reinstatement` rolled up.
 | `n_pairs` | int | number of encoding↔recognition pairs in this Condition |
 
 ## `combined_auc_reinstatement.csv`
-One row per `(participant, phase, emo)`, from the Combined tab's **Left/Right AUC** option. Objects were placed Left or Right; AUC is the Wilcoxon–Mann–Whitney probability that a right-placed trial's lateral gaze bias exceeds a left-placed trial's. `0.5` = chance (no spatial reinstatement), `1.0` = perfect. Encoding indexes looking at the object; recognition AUC is the looking-at-nothing reinstatement effect. Lateral bias per trial is `(right − left dwell)/total` (or fixation counts), from Left/Right AOIs only.
+One row per `(participant, phase, emo)`, from the Combined tab's **Left/Right AUC** option. Objects were placed Left or Right. Per trial, the lateral gaze bias `(right − left dwell)/total` (or fixation counts) is scored over the Left/Right picture AOIs. Per participant, the AUC is the Wilcoxon–Mann–Whitney statistic discriminating object-on-right from object-on-left trials by that score — `P(score_right > score_left)`. `0.5` = chance (no spatial reinstatement), `1.0` = perfect. Encoding indexes looking at the object; recognition AUC is the looking-at-nothing reinstatement effect.
 
 | column | type | meaning |
 |---|---|---|
 | `participant`, `phase`, `emo` | mixed | grouping keys (`emo` from the `Condition` label) |
 | `n_trials`, `n_left`, `n_right` | int | trials contributing, split by object side |
-| `auc` | num | Left/Right discriminability AUC (0.5 = chance) |
-| `auc_lo`, `auc_hi` | num | bootstrap 95% CI (2.5 / 97.5 percentile over trials) |
+| `auc` | num | trial-level Left/Right discriminability AUC (0.5 = chance) |
 
 ## `combined_auc_by_condition.csv`
-One row per `phase × emo` — `combined_auc_reinstatement` averaged across participants.
+One row per `phase × emo` — `combined_auc_reinstatement` aggregated across participants, with a one-sample t-test of the per-participant AUCs against chance (0.5). Participant is the unit of analysis.
 
 | column | type | meaning |
 |---|---|---|
 | `phase`, `emo` | chr | grouping keys |
 | `n_participants` | int | participants contributing to this cell |
 | `mean_auc`, `sd_auc` | num | mean / SD of AUC across participants |
+| `se_auc` | num | standard error of `mean_auc` |
+| `t_stat`, `df` | num | one-sample t statistic `(mean_auc − 0.5)/se_auc` and its df |
+| `p_value` | num | two-sided p for the AUC ≠ 0.5 test (across participants) |
 
 ## `object_recognition_trials.csv`
 Per-trial object old/new recognition, from the **Object Memory** tab. Pulled from the object block of the recognition CSV (rows where the object routine ran), separate from the background-recognition rows. Old objects were seen at encoding; new objects are foils.

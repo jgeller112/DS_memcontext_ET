@@ -1543,13 +1543,13 @@ fixations on right-placed trials sit further right than on left-placed trials.
 
 For each trial we score the lateral gaze bias as
 `(right − left dwell) / total` over the Left/Right AOIs (in `[-1, 1]`), then,
-per `(participant, phase, emo)`, compute the Wilcoxon–Mann–Whitney AUC for
-discriminating right- from left-placed trials. **AUC = 0.5 is chance** (no
-spatial reinstatement), 1.0 perfect. Encoding AUC indexes perceptual
-looking-at-the-object; recognition AUC is the looking-at-nothing reinstatement
-measure. A trial bootstrap gives a 95% CI per cell. This is the 1-D
-(horizontal) reduction of the literature's 2-D-KDE AUC — appropriate here
-because left vs. right is the only spatial manipulation.
+**per `(participant, phase, emo)`**, take the Wilcoxon–Mann–Whitney AUC
+discriminating object-on-RIGHT from object-on-LEFT trials by that score —
+`P(score_right > score_left)`. **AUC = 0.5 is chance** (no spatial
+reinstatement), 1.0 perfect. Encoding sits near ceiling (looking at the
+on-screen object); recognition above 0.5 is the looking-at-nothing
+reinstatement. With one AUC per participant we test against chance *across
+participants* (one-sample t), not a per-cell bootstrap.
 
 ```{r auc-per-trial}
 # Per-trial lateral bias on the picture AOIs, with emo / location split out
@@ -1572,8 +1572,7 @@ auc_per_trial <- fixations_long |>
 ```
 
 ```{r auc-reinstatement}
-# Wilcoxon-Mann-Whitney AUC = P(score_right > score_left). Positive class =
-# object on the right. NA when a cell lacks both sides.
+# Wilcoxon-Mann-Whitney AUC across trials; positive class = object on right.
 auc_mw <- function(score, pos) {
   keep <- is.finite(score); score <- score[keep]; pos <- pos[keep]
   np <- sum(pos); nn <- sum(!pos)
@@ -1582,37 +1581,38 @@ auc_mw <- function(score, pos) {
   (sum(r[pos]) - np * (np + 1) / 2) / (np * nn)
 }
 
-set.seed(1234)
 auc_reinstatement <- auc_per_trial |>
   group_by(participant, phase, emo) |>
-  group_modify(function(d, key) {
-    pos <- d$location == "right"
-    bs  <- replicate(1000, {
-      i <- sample(nrow(d), replace = TRUE)
-      auc_mw(d$score[i], pos[i])
-    })
-    tibble(
-      n_trials = nrow(d), n_left = sum(!pos), n_right = sum(pos),
-      auc      = auc_mw(d$score, pos),
-      auc_lo   = unname(quantile(bs, 0.025, na.rm = TRUE)),
-      auc_hi   = unname(quantile(bs, 0.975, na.rm = TRUE))
-    )
-  }) |>
-  ungroup()
+  summarise(
+    n_trials = n(),
+    n_left   = sum(location == "left"),
+    n_right  = sum(location == "right"),
+    auc      = auc_mw(score, location == "right"),
+    .groups  = "drop"
+  )
 
 auc_reinstatement
 ```
 
 ```{r auc-summary}
-# Mean AUC across participants, per phase x emotion. Recognition rows above
-# 0.5 are the reinstatement effect.
+# Across-participant test of the AUC against chance (0.5), per phase x
+# emotion. Participant is the unit (one AUC each), so a one-sample t replaces
+# the per-cell bootstrap. Recognition rows with mean_auc > 0.5 are the
+# reinstatement effect; with few participants read the p-values cautiously.
 auc_by_condition <- auc_reinstatement |>
   group_by(phase, emo) |>
   summarise(
-    n_participants = n_distinct(participant),
+    n_participants = sum(is.finite(auc)),
     mean_auc       = mean(auc, na.rm = TRUE),
     sd_auc         = sd(auc,   na.rm = TRUE),
     .groups        = "drop"
+  ) |>
+  mutate(
+    se_auc  = sd_auc / sqrt(n_participants),
+    t_stat  = (mean_auc - 0.5) / se_auc,
+    df      = n_participants - 1,
+    p_value = if_else(df >= 1 & is.finite(t_stat),
+                      2 * pt(-abs(t_stat), df), NA_real_)
   )
 
 auc_by_condition

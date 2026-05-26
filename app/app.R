@@ -1407,7 +1407,7 @@ combined_outputs_ui <- function(ns_id) {
         DTOutput(ns("tbl_per_cond"))
       ),
       nav_panel(
-        "Gaze reinstatement",
+        "Reinstatement (eyesim)",
         tags$p(
           "Tests whether the recognition-phase fixation pattern ",
           tags$b("reinstates"), " the encoding-phase pattern for the same ",
@@ -1440,21 +1440,25 @@ combined_outputs_ui <- function(ns_id) {
         DTOutput(ns("tbl_reinst_cond")),
         tags$h6("Per-pair (participant × Background) similarity"),
         dl_csv(ns("dl_reinst"), "Download per-pair CSV"),
-        DTOutput(ns("tbl_reinst")),
-        tags$hr(),
-        tags$h5("Left/Right AUC (looking-at-nothing reinstatement)"),
+        DTOutput(ns("tbl_reinst"))
+      ),
+      nav_panel(
+        "Reinstatement (AUC)",
         tags$p(
           "Alternative metric used in the emotional-memory eye-tracking ",
           "literature this study follows. Objects were placed ",
-          tags$b("Left"), " or ", tags$b("Right"), "; AUC measures how well ",
-          "fixation position separates right- from left-placed trials. ",
-          tags$b("0.5 = chance"), " (no spatial reinstatement), 1.0 = perfect. ",
-          "Encoding indexes looking at the object; recognition above 0.5 is ",
-          "the reinstatement effect. Fast — no permutations needed."
+          tags$b("Left"), " or ", tags$b("Right"), ". Per trial the ",
+          tags$b("lateral gaze bias"), " (right − left dwell over the picture ",
+          "AOIs) is scored; per participant the AUC (Wilcoxon–Mann–Whitney) ",
+          "measures how well that bias separates right- from left-placed ",
+          "trials. ", tags$b("0.5 = chance"), " (no spatial reinstatement), ",
+          "1.0 = perfect. Encoding indexes looking at the object; recognition ",
+          "above 0.5 is the reinstatement effect. The by-condition table tests ",
+          "the AUC against 0.5 across participants (one-sample t)."
         ),
         radioButtons(ns("auc_bias"), "Per-trial lateral score",
           choices = c(
-            "Dwell-time bias"    = "dwell",
+            "Dwell-time bias"     = "dwell",
             "Fixation-count bias" = "count"
           ),
           selected = "dwell", inline = TRUE
@@ -1464,10 +1468,10 @@ combined_outputs_ui <- function(ns_id) {
         ),
         verbatimTextOutput(ns("auc_status")),
         plotOutput(ns("auc_plot"), height = "380px"),
-        tags$h6("Mean AUC by phase × emotion"),
+        tags$h6("Mean AUC by phase × emotion (t-test vs 0.5 across participants)"),
         dl_csv(ns("dl_auc_cond"), "Download phase × emotion CSV"),
         DTOutput(ns("tbl_auc_cond")),
-        tags$h6("Per (participant × phase × emotion) AUC + bootstrap 95% CI"),
+        tags$h6("Per (participant × phase × emotion) AUC"),
         dl_csv(ns("dl_auc"), "Download per-participant CSV"),
         DTOutput(ns("tbl_auc"))
       )

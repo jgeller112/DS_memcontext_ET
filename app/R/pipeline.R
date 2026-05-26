@@ -608,28 +608,18 @@ reinstatement_by_condition <- function(reinstatement) {
     )
 }
 
-# Gaze reinstatement via Left/Right discriminability (AUC) — the approach
-# used in the emotional-memory eye-tracking literature this study is modeled
-# on. Objects were placed Left or Right of the scene; if the gaze pattern
-# carries that spatial information, fixations on right-placed trials sit
-# further right than on left-placed trials. For each (participant, phase,
-# emo) we score every trial's lateral gaze bias and compute the AUC for
-# discriminating right- from left-placed trials (Wilcoxon–Mann–Whitney
-# statistic = P(score_right > score_left)). AUC = 0.5 is chance (no spatial
-# reinstatement), 1.0 is perfect separation. Encoding AUC indexes perceptual
-# looking-at-the-object; recognition AUC is the reinstatement measure.
-#
-# `bias` picks the per-trial lateral score: "dwell" = (right−left dwell time)
-# / total, "count" = same on fixation counts; both in [-1, 1]. A trial's side
-# (location) comes from the `Condition` label ("<emo>-<location>"). Bootstrap
-# over trials gives a 95% CI per cell. Note: this is the 1-D (horizontal)
-# reduction of the paper's 2-D-KDE AUC — appropriate here because the only
-# spatial manipulation is left vs. right.
-run_auc_reinstatement <- function(fixations_long,
-                                  bias = c("dwell", "count"),
-                                  boot = 1000, seed = 1234) {
+# Gaze reinstatement via Left/Right discriminability (AUC), trial-level.
+# Objects were placed Left or Right of the scene. Per trial, score the lateral
+# gaze bias from the picture AOIs: `(right - left dwell) / total` in [-1, 1]
+# (or the same on fixation counts). Per (participant, phase, emo), the AUC is
+# the Wilcoxon-Mann-Whitney statistic discriminating object-on-RIGHT from
+# object-on-LEFT trials by that score = P(score_right > score_left). 0.5 =
+# chance (no spatial reinstatement), 1 = perfect. Encoding sits near ceiling
+# (looking at the on-screen object); recognition above 0.5 is the
+# looking-at-nothing reinstatement. One AUC per participant; test against
+# chance ACROSS participants with auc_by_condition().
+run_auc_reinstatement <- function(fixations_long, bias = c("dwell", "count")) {
   bias <- match.arg(bias)
-  set.seed(seed)
 
   per_trial <- fixations_long |>
     filter(AOI %in% c("Left", "Right"),
@@ -654,10 +644,9 @@ run_auc_reinstatement <- function(fixations_long,
     ) |>
     filter(total > 0, location %in% c("left", "right"))
 
-  # Wilcoxon–Mann–Whitney AUC; positive class = object on the right.
+  # Wilcoxon-Mann-Whitney AUC across trials; positive class = object on right.
   auc_mw <- function(score, pos) {
-    keep  <- is.finite(score)
-    score <- score[keep]; pos <- pos[keep]
+    keep <- is.finite(score); score <- score[keep]; pos <- pos[keep]
     np <- sum(pos); nn <- sum(!pos)
     if (np == 0 || nn == 0) return(NA_real_)
     r <- rank(score)
@@ -666,34 +655,33 @@ run_auc_reinstatement <- function(fixations_long,
 
   per_trial |>
     group_by(participant, phase, emo) |>
-    group_modify(function(d, key) {
-      pos <- d$location == "right"
-      auc <- auc_mw(d$score, pos)
-      bs  <- replicate(boot, {
-        i <- sample(nrow(d), replace = TRUE)
-        auc_mw(d$score[i], pos[i])
-      })
-      tibble(
-        n_trials = nrow(d),
-        n_left   = sum(!pos),
-        n_right  = sum(pos),
-        auc      = auc,
-        auc_lo   = unname(quantile(bs, 0.025, na.rm = TRUE)),
-        auc_hi   = unname(quantile(bs, 0.975, na.rm = TRUE))
-      )
-    }) |>
-    ungroup()
+    summarise(
+      n_trials = n(),
+      n_left   = sum(location == "left"),
+      n_right  = sum(location == "right"),
+      auc      = auc_mw(score, location == "right"),
+      .groups  = "drop"
+    )
 }
 
-# Roll the per-(participant, phase, emo) AUC table up to one row per
-# phase × emo: number of participants and the mean/SD AUC across them.
+# Roll the per-(participant, phase, emo) AUC up to one row per phase × emo and
+# test it against chance (0.5) ACROSS participants — participant is the unit,
+# so this one-sample t replaces the per-cell bootstrap. With few participants
+# it is underpowered; read mean_auc / sd_auc descriptively too.
 auc_by_condition <- function(auc_tbl) {
   auc_tbl |>
     group_by(phase, emo) |>
     summarise(
-      n_participants = n_distinct(participant),
+      n_participants = sum(is.finite(auc)),
       mean_auc       = mean(auc, na.rm = TRUE),
       sd_auc         = sd(auc,   na.rm = TRUE),
       .groups        = "drop"
+    ) |>
+    mutate(
+      se_auc  = sd_auc / sqrt(n_participants),
+      t_stat  = (mean_auc - 0.5) / se_auc,
+      df      = n_participants - 1,
+      p_value = if_else(df >= 1 & is.finite(t_stat),
+                        2 * pt(-abs(t_stat), df), NA_real_)
     )
 }
