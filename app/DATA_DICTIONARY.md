@@ -290,7 +290,7 @@ Same columns as above, one row per `(participant, emo)` — object memory split 
 
 # Combined recognition (background × object memory)
 
-Behavioral-only join from the **Recognition (combined)** tab. Pairs each studied (old) item's background-recognition and object-recognition outcomes. The background block records only the scene and the object block only the object, so the two are linked through the **encoding** scene↔object pairing (`Object` is 1:1 with `Background` at encoding). Join keys are matched case-insensitively (PsychoPy sometimes varies a filename's capitalization across routines), so all 60 studied items pair. Foils are excluded (the two blocks' foils are distinct items with no cross-pairing). No eye-tracking involved.
+Behavioral-only join from the **Recognition (combined)** tab. Pairs each studied (old) item's background-recognition and object-recognition outcomes. The background block records only the scene and the object block only the object, so the two are linked through the **encoding** scene↔object pairing (`Object` is 1:1 with `Background` at encoding). Join keys are matched case-insensitively (PsychoPy sometimes varies a filename's capitalization across routines), so all 60 studied items pair. Foils are excluded (the two blocks' foils are distinct items with no cross-pairing). No eye-tracking involved. Two scope radios filter the exported rows: a **Background scope** and an **Object scope**, each either *old + correct* (that block's hits only) or *old + correct + incorrect* (all studied items, the default).
 
 ## `recognition_combined_items.csv`
 One row per studied item (`participant × Background × Object`), with both memory outcomes side by side.

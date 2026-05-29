@@ -1517,6 +1517,29 @@ recog_combo_ui <- function(ns_id) {
       tags$b("Object Memory → Run object memory"),
       " first; the tables below populate automatically."
     ),
+    layout_columns(
+      col_widths = c(6, 6),
+      radioButtons(ns("bg_scope"), "Background scope",
+        choices = c(
+          "Old + correct"             = "old_correct",
+          "Old + correct + incorrect" = "all"
+        ),
+        selected = "all", inline = TRUE
+      ),
+      radioButtons(ns("obj_scope"), "Object scope",
+        choices = c(
+          "Old + correct"             = "old_correct",
+          "Old + correct + incorrect" = "all"
+        ),
+        selected = "all", inline = TRUE
+      )
+    ),
+    tags$small(tags$em(
+      "Each scope filters the paired studied items below. ",
+      tags$b("Old + correct"), " keeps only items that block recognized ",
+      "correctly (a hit); ", tags$b("Old + correct + incorrect"),
+      " keeps every studied item regardless of accuracy."
+    )),
     navset_card_tab(
       nav_panel(
         "Per item (background × object)",
@@ -1534,7 +1557,7 @@ recog_combo_ui <- function(ns_id) {
 
 recogComboServer <- function(id, enc_state, rec_state, obj_state) {
   moduleServer(id, function(input, output, session) {
-    combined <- reactive({
+    combined_full <- reactive({
       enc <- enc_state$behavioral()
       bg  <- rec_state$behavioral()
       obj <- obj_state$trials()
@@ -1547,6 +1570,16 @@ recogComboServer <- function(id, enc_state, rec_state, obj_state) {
           "Run Object Memory → Run object memory first.")
       )
       combine_recognition(enc, bg, obj)
+    })
+
+    # Apply the per-block scope radios: "old_correct" keeps that block's hits
+    # only (accuracy == 1); "all" keeps every studied item (correct +
+    # incorrect). The join is already old-only, so "all" = all paired items.
+    combined <- reactive({
+      d <- combined_full()
+      if ((input$bg_scope  %||% "all") == "old_correct") d <- dplyr::filter(d, bg_accuracy == 1)
+      if ((input$obj_scope %||% "all") == "old_correct") d <- dplyr::filter(d, obj_accuracy == 1)
+      d
     })
     summary_tbl <- reactive(recognition_joint_summary(combined()))
 
