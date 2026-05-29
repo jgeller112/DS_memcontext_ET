@@ -1688,7 +1688,7 @@ ui <- page_navbar(
     recog_combo_ui("recog_combo")
   ),
   nav_panel(
-    "Combined",
+    "Combined (ET data)",
     combined_outputs_ui("combined")
   ),
   nav_panel(
