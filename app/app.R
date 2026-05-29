@@ -418,15 +418,18 @@ phase_outputs_recognition <- function(ns_id) {
       card_header("Background recognition trial scope"),
       radioButtons(ns("scope"), NULL,
         choices = c(
-          "Old + correct (hits only)" = "old_correct",
+          "Old + correct"             = "old_correct",
+          "Old + correct + incorrect" = "old_all",
           "All trials"                = "all"
         ),
         selected = "old_correct", inline = TRUE
       ),
       tags$small(tags$em(
         "Applies to the AOI summary and AOI × Condition rollup tabs ",
-        "below (and the Summary plots tab). The raw Fixations table and ",
-        "the Combined panel are independent."
+        "below (and the Summary plots tab). ", tags$b("Old + correct"),
+        " = recognized old scenes; ", tags$b("Old + correct + incorrect"),
+        " = all old scenes; ", tags$b("All trials"), " = old + new (foils). ",
+        "The raw Fixations table and the Combined panel are independent."
       ))
     ),
     navset_card_tab(
@@ -1061,10 +1064,11 @@ recognitionServer <- function(id) {
     })
 
     # Scope-aware summary reactives. `input$scope` is the radio in
-    # phase_outputs_recognition: "old_correct" keeps the historical
-    # filter (hits + lures w/ no behavioral); "all" keeps every fixation
-    # regardless of status / accuracy. Outside-AOI fixations always
-    # dropped — the summary is about AOI dwell.
+    # phase_outputs_recognition: "old_correct" = old + correctly recognized,
+    # "old_all" = all old scenes regardless of accuracy, "all" = every
+    # fixation (old + new). NA status/accuracy (e.g. fixations with no merged
+    # behavioral) are kept in the two old-scoped views. Outside-AOI fixations
+    # always dropped — the summary is about AOI dwell.
     fix_summary_react <- reactive({
       fl <- rv$fixations
       req(fl)
@@ -1073,6 +1077,9 @@ recognitionServer <- function(id) {
         fl <- fl |>
           filter(stimulus_status == "old" | is.na(stimulus_status)) |>
           filter(is.na(accuracy) | accuracy == 1)
+      } else if (scope == "old_all") {
+        fl <- fl |>
+          filter(stimulus_status == "old" | is.na(stimulus_status))
       }
       fl |>
         filter(AOI != "Outside") |>
@@ -1403,35 +1410,58 @@ object_ui <- function(ns_id) {
 
 object_outputs_ui <- function(ns_id) {
   ns <- NS(ns_id)
-  card(
-    card_header("Object recognition memory"),
-    tags$p(
-      "Object old/new recognition, extracted from the ", tags$b("object block"),
-      " of the same recognition behavioral file (separate from the background ",
-      "task). Old objects were seen at encoding; ", tags$b("foils"),
-      " are new. Per participant: accuracy, hit / false-alarm rates, ",
-      tags$b("d′"), " (memory sensitivity) and criterion ", tags$b("c"),
-      ", overall and split by emotion (neg / neu)."
+  tagList(
+    card(
+      card_header("Object recognition trial scope"),
+      radioButtons(ns("scope"), NULL,
+        choices = c(
+          "Old + correct"             = "old_correct",
+          "Old + correct + incorrect" = "old_all",
+          "All trials"                = "all"
+        ),
+        selected = "all", inline = TRUE
+      ),
+      tags$small(tags$em(
+        "Applies to the ", tags$b("Behavioral"), " (per-trial) table below. ",
+        "The accuracy / d′ tables always use all trials (old + new), since d′ ",
+        "needs both studied items and foils."
+      ))
     ),
-    navset_card_tab(
-      nav_panel(
-        "Accuracy (per participant)",
-        dl_csv(ns("dl_acc")),
-        DTOutput(ns("tbl_acc"))
+    card(
+      card_header("Object recognition memory"),
+      tags$p(
+        "Object old/new recognition, extracted from the ", tags$b("object block"),
+        " of the same recognition behavioral file (separate from the background ",
+        "task). Old objects were seen at encoding; ", tags$b("foils"),
+        " are new. Per participant: accuracy, hit / false-alarm rates, ",
+        tags$b("d′"), " (memory sensitivity) and criterion ", tags$b("c"),
+        ", overall, by Condition, and split by emotion (neg / neu)."
       ),
-      nav_panel(
-        "Accuracy × emotion",
-        dl_csv(ns("dl_acc_emo")),
-        DTOutput(ns("tbl_acc_emo"))
-      ),
-      nav_panel(
-        "Summary plot",
-        plotOutput(ns("plot"), height = "460px")
-      ),
-      nav_panel(
-        "Per-trial",
-        dl_csv(ns("dl_trials")),
-        DTOutput(ns("tbl_trials"))
+      navset_card_tab(
+        nav_panel(
+          "Behavioral",
+          dl_csv(ns("dl_trials")),
+          DTOutput(ns("tbl_trials"))
+        ),
+        nav_panel(
+          "Accuracy (HR / FAR / d′ / c)",
+          dl_csv(ns("dl_acc")),
+          DTOutput(ns("tbl_acc"))
+        ),
+        nav_panel(
+          "Accuracy by Condition",
+          dl_csv(ns("dl_acc_cond")),
+          DTOutput(ns("tbl_acc_cond"))
+        ),
+        nav_panel(
+          "Accuracy × emotion",
+          dl_csv(ns("dl_acc_emo")),
+          DTOutput(ns("tbl_acc_emo"))
+        ),
+        nav_panel(
+          "Summary plot",
+          plotOutput(ns("plot"), height = "460px")
+        )
       )
     )
   )
@@ -1440,7 +1470,7 @@ object_outputs_ui <- function(ns_id) {
 objectServer <- function(id) {
   moduleServer(id, function(input, output, session) {
     rv <- reactiveValues(
-      trials = NULL, acc = NULL, acc_emo = NULL,
+      trials = NULL, acc = NULL, acc_cond = NULL, acc_emo = NULL,
       status = "Upload recognition behavioral CSV(s), then click Run object memory."
     )
     output$status <- renderText(rv$status)
@@ -1452,9 +1482,11 @@ objectServer <- function(id) {
       tryCatch(
         {
           trials <- map(paths, read_object_recognition) |> list_rbind()
-          rv$trials  <- trials
-          rv$acc     <- recognition_accuracy(trials)
-          rv$acc_emo <- recognition_accuracy(trials,
+          rv$trials   <- trials
+          rv$acc      <- recognition_accuracy(trials)
+          rv$acc_cond <- recognition_accuracy(trials,
+                                             groupvars = c("participant", "Condition"))
+          rv$acc_emo  <- recognition_accuracy(trials,
                                              groupvars = c("participant", "emo"))
           rv$status <- sprintf(
             "Object memory: %d trials from %d participant(s). Mean d′ = %.2f.",
@@ -1468,14 +1500,27 @@ objectServer <- function(id) {
       )
     })
 
+    # Per-trial table honors the scope radio. Accuracy / d′ tables always use
+    # all trials (d′ needs old + new), mirroring how Background Recognition's
+    # accuracy is independent of its fixation-scope radio.
+    trials_scoped <- reactive({
+      t <- req(rv$trials)
+      switch(input$scope %||% "all",
+        old_correct = dplyr::filter(t, stimulus_status == "old", accuracy == 1),
+        old_all     = dplyr::filter(t, stimulus_status == "old"),
+        t
+      )
+    })
+
     render_dt <- function(tbl) {
       datatable(tbl, options = list(pageLength = 10, scrollX = TRUE),
                 rownames = FALSE)
     }
-    output$tbl_acc     <- renderDT(req(rv$acc)     |> render_dt())
-    output$tbl_acc_emo <- renderDT(req(rv$acc_emo) |> render_dt())
-    output$tbl_trials  <- renderDT(req(rv$trials)  |> render_dt())
-    output$plot        <- renderPlot(object_plot(req(rv$acc_emo)))
+    output$tbl_trials   <- renderDT(trials_scoped()    |> render_dt())
+    output$tbl_acc      <- renderDT(req(rv$acc)        |> render_dt())
+    output$tbl_acc_cond <- renderDT(req(rv$acc_cond)   |> render_dt())
+    output$tbl_acc_emo  <- renderDT(req(rv$acc_emo)    |> render_dt())
+    output$plot         <- renderPlot(object_plot(req(rv$acc_emo)))
 
     make_dl <- function(tbl_react, fname) {
       downloadHandler(
@@ -1483,9 +1528,10 @@ objectServer <- function(id) {
         content  = function(file) write_csv(tbl_react(), file)
       )
     }
-    output$dl_acc     <- make_dl(reactive(req(rv$acc)),     "object_recognition_accuracy.csv")
-    output$dl_acc_emo <- make_dl(reactive(req(rv$acc_emo)), "object_recognition_accuracy_by_emotion.csv")
-    output$dl_trials  <- make_dl(reactive(req(rv$trials)),  "object_recognition_trials.csv")
+    output$dl_trials   <- make_dl(trials_scoped,                "object_recognition_trials.csv")
+    output$dl_acc      <- make_dl(reactive(req(rv$acc)),        "object_recognition_accuracy.csv")
+    output$dl_acc_cond <- make_dl(reactive(req(rv$acc_cond)),   "object_recognition_accuracy_by_condition.csv")
+    output$dl_acc_emo  <- make_dl(reactive(req(rv$acc_emo)),    "object_recognition_accuracy_by_emotion.csv")
 
     # Exposed for recogComboServer — the Combined recognition tab consumes this.
     list(trials = reactive(rv$trials))

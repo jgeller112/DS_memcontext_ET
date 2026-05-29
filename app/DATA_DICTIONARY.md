@@ -267,7 +267,7 @@ One row per `(participant, Condition, AOI)` — `combined_per_background` averag
 | `encoding_mean_total_dwell_time`, `recognition_mean_total_dwell_time` | num | mean (across Backgrounds) of total dwell time in this AOI (ms) |
 
 ## `object_recognition_trials.csv`
-Per-trial object old/new recognition, from the **Object Memory** tab. Pulled from the object block of the recognition CSV (rows where the object routine ran), separate from the background-recognition rows. Old objects were seen at encoding; new objects are foils.
+Per-trial object old/new recognition, from the **Object Memory** tab. Pulled from the object block of the recognition CSV (rows where the object routine ran), separate from the background-recognition rows. Old objects were seen at encoding; new objects are foils. The tab's scope radio filters this exported table — *old + correct* (hits only), *old + correct + incorrect* (all studied items), or *all trials* (old + foils, the default); the accuracy / d′ tables below always use all trials.
 
 | column | type | meaning |
 |---|---|---|
@@ -283,8 +283,11 @@ Per-trial object old/new recognition, from the **Object Memory** tab. Pulled fro
 ## `object_recognition_accuracy.csv`
 Per-participant signal-detection object memory (same columns as `recognition_accuracy.csv`): `n_old`, `n_new`, `n_hit`, `n_cr`, `n_fa`, `n_miss`, `accuracy`, `hit_rate`, `fa_rate`, `d_prime`, `c_bias`. Hit/FA rates use the (x+0.5)/(n+1) log-linear correction.
 
+## `object_recognition_accuracy_by_condition.csv`
+Same columns as above, one row per `(participant, Condition)` — object memory split by the encoding `Condition` (`<emo>-<location>` for old objects, `foil_<emo>` for foils). Mirrors `recognition_accuracy_by_condition.csv`. Note that old and foil items carry different `Condition` labels, so within a single old condition there are no foils (and vice versa); read `hit_rate` for old conditions and `fa_rate` for foil conditions rather than the per-condition `d_prime`.
+
 ## `object_recognition_accuracy_by_emotion.csv`
-Same columns as above, one row per `(participant, emo)` — object memory split by emotion (negative vs. neutral). For each emotion, hits come from old objects of that emotion and false alarms from foils of that emotion.
+Same columns as above, one row per `(participant, emo)` — object memory split by emotion (negative vs. neutral). For each emotion, hits come from old objects of that emotion and false alarms from foils of that emotion. (Unlike the by-Condition table, each emotion contains both old and foil items, so `d_prime` is well defined here.)
 
 ---
 
