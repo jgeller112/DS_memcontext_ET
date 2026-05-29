@@ -206,79 +206,6 @@ boxplot_summary <- function(df, y_var, x_var, fill_var, facet_var) {
   p
 }
 
-# Per-pair gaze-reinstatement effect (eye_sim_diff, Fisher-z) by Condition:
-# boxplot + jittered points, with a dashed zero line marking "no
-# reinstatement above the within-participant permutation null".
-reinstatement_plot <- function(reinstatement) {
-  df <- reinstatement |>
-    dplyr::filter(!is.na(eye_sim_diff)) |>
-    dplyr::mutate(Condition = as.factor(Condition))
-
-  ggplot2::ggplot(
-    df, ggplot2::aes(x = Condition, y = eye_sim_diff, fill = Condition)
-  ) +
-    ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
-    ggplot2::geom_boxplot(
-      outlier.shape = NA, alpha = 0.7, color = "black",
-      linewidth = 0.6, width = 0.6
-    ) +
-    ggplot2::geom_point(
-      shape = 21, color = "black", size = 2.4, stroke = 0.5, alpha = 0.85,
-      position = ggplot2::position_jitter(width = 0.15, height = 0),
-      show.legend = FALSE
-    ) +
-    ggplot2::scale_fill_manual(values = okabe_ito) +
-    ggplot2::theme_minimal(base_size = 14) +
-    ggplot2::theme(
-      axis.title = ggplot2::element_text(face = "bold", size = 14),
-      axis.text  = ggplot2::element_text(face = "bold", size = 14)
-    ) +
-    ggplot2::labs(
-      x = "Condition",
-      y = "Reinstatement (eye_sim_diff, Fisher-z)",
-      title = "Encoding ↔ recognition gaze reinstatement"
-    )
-}
-
-# Left/Right discriminability (AUC) per participant, faceted by phase and
-# split by emotion. Dashed line at 0.5 = chance (no spatial reinstatement);
-# encoding sits high (looking at the object), recognition above 0.5 is the
-# looking-at-nothing reinstatement effect.
-auc_plot <- function(auc_tbl) {
-  df <- auc_tbl |>
-    dplyr::filter(is.finite(auc)) |>
-    dplyr::mutate(
-      emo   = as.factor(emo),
-      phase = factor(phase, levels = c("encoding", "recognition"))
-    )
-
-  ggplot2::ggplot(df, ggplot2::aes(x = emo, y = auc, fill = emo)) +
-    ggplot2::geom_hline(yintercept = 0.5, linetype = "dashed", color = "grey40") +
-    ggplot2::geom_boxplot(
-      outlier.shape = NA, alpha = 0.7, color = "black",
-      linewidth = 0.6, width = 0.6
-    ) +
-    ggplot2::geom_point(
-      shape = 21, color = "black", size = 2.4, stroke = 0.5, alpha = 0.85,
-      position = ggplot2::position_jitter(width = 0.12, height = 0),
-      show.legend = FALSE
-    ) +
-    ggplot2::facet_wrap(ggplot2::vars(phase)) +
-    ggplot2::scale_fill_manual(values = okabe_ito) +
-    ggplot2::ylim(0, 1) +
-    ggplot2::theme_minimal(base_size = 14) +
-    ggplot2::theme(
-      axis.title  = ggplot2::element_text(face = "bold", size = 14),
-      axis.text   = ggplot2::element_text(face = "bold", size = 14),
-      strip.text  = ggplot2::element_text(face = "bold", size = 13)
-    ) +
-    ggplot2::labs(
-      x = "Emotion",
-      y = "AUC: rightward-gaze bias predicts object-on-right",
-      title = "Gaze reinstatement — Left/Right AUC (right-referenced; 0.5 = chance)"
-    )
-}
-
 # Object-memory sensitivity (d') by emotion, one dot per participant. d' = 0
 # is chance discrimination of old objects from foils; higher = better memory.
 object_plot <- function(acc_emo) {
@@ -1405,77 +1332,6 @@ combined_outputs_ui <- function(ns_id) {
         "Per (participant × Condition × AOI)",
         dl_csv(ns("dl_per_cond")),
         DTOutput(ns("tbl_per_cond"))
-      ),
-      nav_panel(
-        "Reinstatement (eyesim)",
-        tags$p(
-          "Tests whether the recognition-phase fixation pattern ",
-          tags$b("reinstates"), " the encoding-phase pattern for the same ",
-          tags$code("Background"), " within participant (",
-          tags$code("eyesim"), " density-map similarity vs. a ",
-          "within-participant permutation null). Uses the paired fixations ",
-          "above, so it follows the recognition-scope radio. Coordinates are ",
-          "clipped to the picture box before density estimation."
-        ),
-        layout_columns(
-          col_widths = c(3, 3, 6),
-          numericInput(ns("reinst_sigma"), "Density sigma (px)",
-            value = 80, min = 10, max = 300, step = 10
-          ),
-          numericInput(ns("reinst_perms"), "Permutations",
-            value = 1000, min = 0, max = 5000, step = 100
-          ),
-          div(
-            class = "d-flex align-items-end h-100",
-            actionButton(ns("run_reinstatement"),
-              "Run reinstatement (slow)",
-              class = "btn-warning btn-sm"
-            )
-          )
-        ),
-        verbatimTextOutput(ns("reinst_status")),
-        plotOutput(ns("reinst_plot"), height = "420px"),
-        tags$h6("Mean reinstatement by Condition"),
-        dl_csv(ns("dl_reinst_cond"), "Download by-condition CSV"),
-        DTOutput(ns("tbl_reinst_cond")),
-        tags$h6("Per-pair (participant × Background) similarity"),
-        dl_csv(ns("dl_reinst"), "Download per-pair CSV"),
-        DTOutput(ns("tbl_reinst"))
-      ),
-      nav_panel(
-        "Reinstatement (AUC)",
-        tags$p(
-          "Alternative metric used in the emotional-memory eye-tracking ",
-          "literature this study follows. Objects were placed ",
-          tags$b("Left"), " or ", tags$b("Right"), ". Per trial the ",
-          tags$b("rightward gaze bias"), " (right − left dwell over the ",
-          "picture AOIs) is scored; per participant the AUC measures how well ",
-          "that bias separates right- from left-placed trials. The AUC is ",
-          tags$b("right-referenced"), " (positive class = object-on-right): ",
-          tags$b("0.5 = chance"), ", > 0.5 = gaze runs toward the object's ",
-          "side (reinstatement), < 0.5 = toward the opposite side. Encoding ",
-          "indexes looking at the object; recognition above 0.5 is the ",
-          "reinstatement effect. The by-condition table tests the AUC against ",
-          "0.5 across participants (one-sample t)."
-        ),
-        radioButtons(ns("auc_bias"), "Per-trial lateral score",
-          choices = c(
-            "Dwell-time bias"     = "dwell",
-            "Fixation-count bias" = "count"
-          ),
-          selected = "dwell", inline = TRUE
-        ),
-        actionButton(ns("run_auc"), "Run Left/Right AUC",
-          class = "btn-warning btn-sm"
-        ),
-        verbatimTextOutput(ns("auc_status")),
-        plotOutput(ns("auc_plot"), height = "380px"),
-        tags$h6("Mean AUC by phase × emotion (t-test vs 0.5 across participants)"),
-        dl_csv(ns("dl_auc_cond"), "Download phase × emotion CSV"),
-        DTOutput(ns("tbl_auc_cond")),
-        tags$h6("Per (participant × phase × emotion) AUC"),
-        dl_csv(ns("dl_auc"), "Download per-participant CSV"),
-        DTOutput(ns("tbl_auc"))
       )
     )
   )
@@ -1517,82 +1373,6 @@ combinedServer <- function(id, enc_state, rec_state) {
     output$dl_long    <- make_dl(fixations_long, "combined_fixations_long.csv")
     output$dl_per_bg  <- make_dl(per_bg,         "combined_per_background.csv")
     output$dl_per_cond <- make_dl(per_cd,        "combined_per_condition_aoi.csv")
-
-    # Gaze reinstatement (eyesim) — expensive, so it's button-triggered
-    # rather than reactive on every fixation/scope change.
-    reinstatement <- eventReactive(input$run_reinstatement, {
-      fl <- fixations_long()
-      validate(need(nrow(fl) > 0,
-        "No paired encoding/recognition fixations to compare."))
-      withProgress(message = "Computing gaze reinstatement (eyesim)…",
-                   value = 0.3, {
-        run_reinstatement(
-          fl,
-          sigma        = input$reinst_sigma %||% 80,
-          permutations = input$reinst_perms %||% 1000
-        )
-      })
-    })
-
-    reinst_cond <- reactive(reinstatement_by_condition(reinstatement()))
-
-    output$reinst_status <- renderText({
-      if (input$run_reinstatement == 0) {
-        return("Set sigma + permutations, then click Run reinstatement.")
-      }
-      r <- tryCatch(reinstatement(), error = function(e) e)
-      if (inherits(r, "error")) return(paste("Error:", conditionMessage(r)))
-      sprintf(
-        "%d encoding↔recognition pairs. Mean eye_sim_diff (Fisher-z) = %.3f.",
-        nrow(r), mean(r$eye_sim_diff, na.rm = TRUE)
-      )
-    })
-
-    output$reinst_plot <- renderPlot({
-      req(input$run_reinstatement > 0)
-      reinstatement_plot(req(reinstatement()))
-    })
-    output$tbl_reinst      <- renderDT(req(reinstatement()) |> render_dt())
-    output$tbl_reinst_cond <- renderDT(req(reinst_cond())   |> render_dt())
-
-    output$dl_reinst      <- make_dl(reinstatement, "combined_reinstatement.csv")
-    output$dl_reinst_cond <- make_dl(reinst_cond,
-                                     "combined_reinstatement_by_condition.csv")
-
-    # Left/Right AUC reinstatement — fast, also button-triggered for parity.
-    auc_tbl <- eventReactive(input$run_auc, {
-      fl <- fixations_long()
-      validate(need(nrow(fl) > 0,
-        "No paired encoding/recognition fixations to compare."))
-      withProgress(message = "Computing Left/Right AUC…", value = 0.3, {
-        run_auc_reinstatement(fl, bias = input$auc_bias %||% "dwell")
-      })
-    })
-    auc_cond <- reactive(auc_by_condition(auc_tbl()))
-
-    output$auc_status <- renderText({
-      if (input$run_auc == 0) {
-        return("Pick a lateral score, then click Run Left/Right AUC.")
-      }
-      r <- tryCatch(auc_tbl(), error = function(e) e)
-      if (inherits(r, "error")) return(paste("Error:", conditionMessage(r)))
-      enc <- mean(r$auc[r$phase == "encoding"],    na.rm = TRUE)
-      rec <- mean(r$auc[r$phase == "recognition"], na.rm = TRUE)
-      sprintf(
-        "Mean AUC — encoding = %.3f (looking at object), recognition = %.3f (reinstatement; 0.5 = chance).",
-        enc, rec
-      )
-    })
-
-    output$auc_plot <- renderPlot({
-      req(input$run_auc > 0)
-      auc_plot(req(auc_tbl()))
-    })
-    output$tbl_auc      <- renderDT(req(auc_tbl())  |> render_dt())
-    output$tbl_auc_cond <- renderDT(req(auc_cond()) |> render_dt())
-
-    output$dl_auc      <- make_dl(auc_tbl,  "combined_auc_reinstatement.csv")
-    output$dl_auc_cond <- make_dl(auc_cond, "combined_auc_by_condition.csv")
   })
 }
 
@@ -1706,6 +1486,87 @@ objectServer <- function(id) {
     output$dl_acc     <- make_dl(reactive(req(rv$acc)),     "object_recognition_accuracy.csv")
     output$dl_acc_emo <- make_dl(reactive(req(rv$acc_emo)), "object_recognition_accuracy_by_emotion.csv")
     output$dl_trials  <- make_dl(reactive(req(rv$trials)),  "object_recognition_trials.csv")
+
+    # Exposed for recogComboServer — the Combined recognition tab consumes this.
+    list(trials = reactive(rv$trials))
+  })
+}
+
+# ---- Combined recognition (background × object memory) ---------------------
+# Behavioral-only tab: pairs each studied item's background-recognition and
+# object-recognition outcomes, linked through the encoding scene↔object
+# pairing, so you can see whether the scene and its object were each
+# recognized. No eye-tracking.
+recog_combo_ui <- function(ns_id) {
+  ns <- NS(ns_id)
+  card(
+    card_header("Combined recognition — background × object memory"),
+    tags$p(
+      "Joins ", tags$b("background recognition"), " and ",
+      tags$b("object recognition"), " at the item level for studied ",
+      tags$b("(old)"), " items. The background block only records the scene ",
+      "and the object block only the object, so the two are linked through ",
+      "the ", tags$b("encoding"), " scene↔object pairing — letting you see ",
+      "whether each studied scene and its object were later recognized. ",
+      "Behavioral only — no eye-tracking. Foils are excluded (the two blocks' ",
+      "foils are distinct items with no pairing)."
+    ),
+    tags$p(
+      "Run ", tags$b("Encoding → Run behavioral"), ", ",
+      tags$b("Background Recognition → Run behavioral"), ", and ",
+      tags$b("Object Memory → Run object memory"),
+      " first; the tables below populate automatically."
+    ),
+    navset_card_tab(
+      nav_panel(
+        "Per item (background × object)",
+        dl_csv(ns("dl_items")),
+        DTOutput(ns("tbl_items"))
+      ),
+      nav_panel(
+        "Joint memory summary",
+        dl_csv(ns("dl_summary")),
+        DTOutput(ns("tbl_summary"))
+      )
+    )
+  )
+}
+
+recogComboServer <- function(id, enc_state, rec_state, obj_state) {
+  moduleServer(id, function(input, output, session) {
+    combined <- reactive({
+      enc <- enc_state$behavioral()
+      bg  <- rec_state$behavioral()
+      obj <- obj_state$trials()
+      validate(
+        need(!is.null(enc),
+          "Run Encoding → Run behavioral first (needed for the scene↔object pairing)."),
+        need(!is.null(bg),
+          "Run Background Recognition → Run behavioral first."),
+        need(!is.null(obj),
+          "Run Object Memory → Run object memory first.")
+      )
+      combine_recognition(enc, bg, obj)
+    })
+    summary_tbl <- reactive(recognition_joint_summary(combined()))
+
+    render_dt <- function(tbl) {
+      datatable(tbl,
+        options = list(pageLength = 10, scrollX = TRUE),
+        rownames = FALSE
+      )
+    }
+    output$tbl_items   <- renderDT(req(combined())    |> render_dt())
+    output$tbl_summary <- renderDT(req(summary_tbl()) |> render_dt())
+
+    make_dl <- function(tbl_react, fname) {
+      downloadHandler(
+        filename = function() fname,
+        content  = function(file) write_csv(tbl_react(), file)
+      )
+    }
+    output$dl_items   <- make_dl(combined,    "recognition_combined_items.csv")
+    output$dl_summary <- make_dl(summary_tbl, "recognition_combined_summary.csv")
   })
 }
 
@@ -1744,6 +1605,10 @@ ui <- page_navbar(
     object_outputs_ui("obj")
   ),
   nav_panel(
+    "Recognition (combined)",
+    recog_combo_ui("recog_combo")
+  ),
+  nav_panel(
     "Combined",
     combined_outputs_ui("combined")
   ),
@@ -1769,6 +1634,13 @@ ui <- page_navbar(
           "For ", tags$b("Object Memory"), ", upload the recognition ",
           "behavioral CSV(s) — d′ / accuracy for the object old/new block ",
           "are computed from the same file (no eye-tracking needed)."
+        ),
+        tags$li(
+          "The ", tags$b("Recognition (combined)"), " tab pairs each studied ",
+          "item's background- and object-recognition outcomes (behavioral ",
+          "only), linked via the encoding scene↔object pairing — run ",
+          tags$b("Encoding"), ", ", tags$b("Background Recognition"), ", and ",
+          tags$b("Object Memory"), " behavioral first and it fills in automatically."
         )
       ),
       tags$p(
@@ -1783,10 +1655,7 @@ ui <- page_navbar(
       tags$p(
         "Requires: ", tags$code("kollaR"),
         " for fixation detection (",
-        tags$code("install.packages('kollaR')"),
-        "), and ", tags$code("eyesim"),
-        " for the Combined tab's gaze-reinstatement analysis (",
-        tags$code("remotes::install_github('bbuchsbaum/eyesim')"), ")."
+        tags$code("install.packages('kollaR')"), ")."
       )
     ),
     card(
@@ -1799,8 +1668,9 @@ ui <- page_navbar(
 server <- function(input, output, session) {
   enc_state <- encodingServer("enc")
   rec_state <- recognitionServer("rec")
-  objectServer("obj")
+  obj_state <- objectServer("obj")
   combinedServer("combined", enc_state, rec_state)
+  recogComboServer("recog_combo", enc_state, rec_state, obj_state)
 }
 
 shinyApp(ui, server)

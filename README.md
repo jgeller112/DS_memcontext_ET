@@ -12,7 +12,7 @@ The repo has two faces:
 | | what it is |
 |---|---|
 | **`encoding_behavioral.qmd`** | Quarto pipeline — full reproducible workflow from raw files → behavioral tables → I-VT fixations → AOI summaries → gaze reinstatement (eyesim density similarity **and** Left/Right AUC) → object-recognition memory. Can pull the raw data straight from OSF via `osfr`. |
-| **`app/`** | Shiny app wrapping the behavioral + ET summaries: browser uploads, AOI fixation viewer, heatmaps, box plots, encoding↔recognition gaze reinstatement, and object-memory d′ |
+| **`app/`** | Shiny app wrapping the behavioral + ET summaries: browser uploads, AOI fixation viewer, heatmaps, box plots, encoding↔recognition fixation summaries, object-memory d′, and combined background×object recognition |
 | **`app/DATA_DICTIONARY.md`** | Column-level docs for every CSV the pipeline writes |
 
 `Data/` is intentionally not tracked — participant files stay local. The qmd's
@@ -28,7 +28,7 @@ install.packages(c(
   "shiny", "bslib", "DT", "ggplot2", "ggrain", "markdown",
   "tidyverse", "here", "kollaR", "jpeg", "png", "osfr"
 ))
-# eyesim is GitHub-only:
+# eyesim is GitHub-only (used by the qmd's gaze-reinstatement section):
 remotes::install_github("bbuchsbaum/eyesim")
 ```
 
@@ -53,10 +53,11 @@ Tabs:
 - **Object Memory** — upload the recognition behavioral CSV(s); computes
   object old/new memory (accuracy, hit/FA, d′, criterion) overall and by
   emotion. Behavioral only — object recognition had no eye-tracking.
-- **Combined** — encoding↔recognition fixation summaries plus two
-  gaze-reinstatement views: **Reinstatement (eyesim)** (density-map
-  similarity vs a permutation null) and **Reinstatement (AUC)** (Left/Right
-  discriminability, right-referenced, 0.5 = chance).
+- **Recognition (combined)** — pairs each studied item's background- and
+  object-recognition outcomes (behavioral only), linked through the encoding
+  scene↔object pairing, with a per-participant joint-memory summary.
+- **Combined** — encoding↔recognition fixation summaries (paired fixations,
+  per-Background and per-Condition AOI dwell).
 
 Each phase tab expects three file types:
 - behavioral CSVs (PsychoPy output)

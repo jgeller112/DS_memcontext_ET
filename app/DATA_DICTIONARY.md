@@ -204,7 +204,7 @@ Recognition I-VT fixations, AOI-labeled, joined with `recognition_behavioral`.
 | `AOI` | chr | `Left` / `Right` / `Outside` |
 
 ## `recognition_fix_summary.csv`
-Per `(participant, trial, Background, Condition, AOI)` rollup, **restricted to correctly recognized old items** (`stimulus_status == "old"` AND `accuracy == 1`). `Outside` fixations dropped. Matches the eyesim reinstatement scope.
+Per `(participant, trial, Background, Condition, AOI)` rollup, **restricted to correctly recognized old items** (`stimulus_status == "old"` AND `accuracy == 1`). `Outside` fixations dropped.
 
 | column | type | meaning |
 |---|---|---|
@@ -266,47 +266,6 @@ One row per `(participant, Condition, AOI)` — `combined_per_background` averag
 | `encoding_mean_fix_duration`, `recognition_mean_fix_duration` | num | mean (across Backgrounds) of within-Background mean fixation duration (ms) |
 | `encoding_mean_total_dwell_time`, `recognition_mean_total_dwell_time` | num | mean (across Backgrounds) of total dwell time in this AOI (ms) |
 
-## `combined_reinstatement.csv`
-One row per encoding↔recognition pair (`participant × Background`), from the Combined tab's **Gaze reinstatement** sub-tab (`eyesim`). Each recognition-phase fixation-density map is compared to the *same* participant + Background encoding map, benchmarked against a within-participant permutation null. Fixations are clipped to the picture box (x: 610–1310, y: 265–815) and smoothed with a Gaussian (`sigma`, default 80 px ≈ 2°) before density estimation. Follows the recognition-scope radio (old+correct vs. all).
-
-| column | type | meaning |
-|---|---|---|
-| `participant`, `Background`, `Condition`, `pair_id` | mixed | grouping keys (`pair_id = "Background::Condition"`) |
-| `eye_sim` | num | observed recognition↔encoding density similarity (Spearman) |
-| `perm_sim` | num | mean similarity under the within-participant permutation null |
-| `eye_sim_diff` | num | observed − permuted similarity in Fisher-z space — the per-pair reinstatement effect |
-
-## `combined_reinstatement_by_condition.csv`
-One row per `Condition` — `combined_reinstatement` rolled up.
-
-| column | type | meaning |
-|---|---|---|
-| `Condition` | chr | grouping key |
-| `mean_eye_sim`, `mean_perm_sim` | num | mean observed / permuted similarity |
-| `mean_eye_sim_diff`, `sd_eye_sim_diff` | num | mean / SD of the Fisher-z reinstatement effect |
-| `n_pairs` | int | number of encoding↔recognition pairs in this Condition |
-
-## `combined_auc_reinstatement.csv`
-One row per `(participant, phase, emo)`, from the Combined tab's **Left/Right AUC** option. Objects were placed Left or Right. Per trial, the rightward gaze bias `(right − left dwell)/total` (or fixation counts) is scored over the Left/Right picture AOIs. Per participant, the AUC discriminates object-on-right from object-on-left trials by that score — `P(score_right > score_left)`. The AUC is **right-referenced** (positive class = object-on-right): `0.5` = chance, `> 0.5` = gaze runs toward the object's side (reinstatement), `< 0.5` = toward the opposite side, `1.0` = perfect. Encoding indexes looking at the object; recognition AUC is the looking-at-nothing reinstatement effect.
-
-| column | type | meaning |
-|---|---|---|
-| `participant`, `phase`, `emo` | mixed | grouping keys (`emo` from the `Condition` label) |
-| `n_trials`, `n_left`, `n_right` | int | trials contributing, split by object side |
-| `auc` | num | trial-level Left/Right discriminability AUC (0.5 = chance) |
-
-## `combined_auc_by_condition.csv`
-One row per `phase × emo` — `combined_auc_reinstatement` aggregated across participants, with a one-sample t-test of the per-participant AUCs against chance (0.5). Participant is the unit of analysis.
-
-| column | type | meaning |
-|---|---|---|
-| `phase`, `emo` | chr | grouping keys |
-| `n_participants` | int | participants contributing to this cell |
-| `mean_auc`, `sd_auc` | num | mean / SD of AUC across participants |
-| `se_auc` | num | standard error of `mean_auc` |
-| `t_stat`, `df` | num | one-sample t statistic `(mean_auc − 0.5)/se_auc` and its df |
-| `p_value` | num | two-sided p for the AUC ≠ 0.5 test (across participants) |
-
 ## `object_recognition_trials.csv`
 Per-trial object old/new recognition, from the **Object Memory** tab. Pulled from the object block of the recognition CSV (rows where the object routine ran), separate from the background-recognition rows. Old objects were seen at encoding; new objects are foils.
 
@@ -326,6 +285,36 @@ Per-participant signal-detection object memory (same columns as `recognition_acc
 
 ## `object_recognition_accuracy_by_emotion.csv`
 Same columns as above, one row per `(participant, emo)` — object memory split by emotion (negative vs. neutral). For each emotion, hits come from old objects of that emotion and false alarms from foils of that emotion.
+
+---
+
+# Combined recognition (background × object memory)
+
+Behavioral-only join from the **Recognition (combined)** tab. Pairs each studied (old) item's background-recognition and object-recognition outcomes. The background block records only the scene and the object block only the object, so the two are linked through the **encoding** scene↔object pairing (`Object` is 1:1 with `Background` at encoding). Join keys are matched case-insensitively (PsychoPy sometimes varies a filename's capitalization across routines), so all 60 studied items pair. Foils are excluded (the two blocks' foils are distinct items with no cross-pairing). No eye-tracking involved.
+
+## `recognition_combined_items.csv`
+One row per studied item (`participant × Background × Object`), with both memory outcomes side by side.
+
+| column | type | meaning |
+|---|---|---|
+| `participant` | chr | participant ID |
+| `Background` | chr | studied scene (join key to background recognition) |
+| `Object` | chr | object encoded with that scene (join key to object recognition) |
+| `Condition` | chr | encoding condition (e.g. `neg-left`) |
+| `bg_response`, `bg_accuracy` | mixed | background-recognition response and accuracy (1 = correct) |
+| `emo` | chr | `neg` / `neu` from the object block |
+| `obj_response`, `obj_accuracy` | mixed | object-recognition response and accuracy (1 = correct) |
+| `joint_outcome` | chr | `both recognized` / `background only` / `object only` / `neither` |
+
+## `recognition_combined_summary.csv`
+Per-participant rollup of `recognition_combined_items.csv`.
+
+| column | type | meaning |
+|---|---|---|
+| `participant` | chr | grouping key |
+| `n_items` | int | studied items contributing (paired in both blocks) |
+| `bg_accuracy`, `obj_accuracy` | num | mean background / object recognition accuracy |
+| `p_both`, `p_background_only`, `p_object_only`, `p_neither` | num | proportion of items in each `joint_outcome` bucket |
 
 ---
 
