@@ -152,10 +152,10 @@ heatmap_plot <- function(fix_df, img_array, stim_name, title) {
 okabe_ito <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442",
                "#0072B2", "#D55E00", "#CC79A7", "#000000")
 
-# Build a box plot with jittered participant dots, used by both the encoding
-# and recognition Summary plots tabs. `df` should already carry whichever
-# categorical columns the X / fill / facet specs reference.
-boxplot_summary <- function(df, y_var, x_var, fill_var, facet_var) {
+# Build a bar graph of group means, used by both the encoding and recognition
+# Summary plots tabs. `df` should already carry whichever categorical columns
+# the X / fill / facet specs reference; bars show the mean of `y_var` per group.
+barplot_summary <- function(df, y_var, x_var, fill_var, facet_var) {
   y_label <- c(
     mean_total_dwell_time = "Mean total dwell time (ms)",
     mean_n_fixations      = "Mean number of fixations",
@@ -169,25 +169,26 @@ boxplot_summary <- function(df, y_var, x_var, fill_var, facet_var) {
       as.factor
     ))
 
-  use_fill <- !is.null(fill_var) && fill_var != "_none"
+  use_fill  <- !is.null(fill_var) && fill_var != "_none"
+  use_facet <- !is.null(facet_var) && facet_var != "_none"
+
+  group_vars <- unique(c(x_var, if (use_fill) fill_var, if (use_facet) facet_var))
+  bars <- df |>
+    dplyr::group_by(dplyr::across(dplyr::all_of(group_vars))) |>
+    dplyr::summarise(.value = mean(.data[[y_var]], na.rm = TRUE),
+                     .groups = "drop")
+
   mapping <- if (use_fill) {
-    ggplot2::aes(x = .data[[x_var]], y = .data[[y_var]],
+    ggplot2::aes(x = .data[[x_var]], y = .data[[".value"]],
                  fill = .data[[fill_var]])
   } else {
-    ggplot2::aes(x = .data[[x_var]], y = .data[[y_var]])
+    ggplot2::aes(x = .data[[x_var]], y = .data[[".value"]])
   }
 
-  p <- ggplot2::ggplot(df, mapping) +
-    ggplot2::geom_boxplot(
-      outlier.shape = NA, alpha = 0.7, color = "black", linewidth = 0.6,
+  p <- ggplot2::ggplot(bars, mapping) +
+    ggplot2::geom_col(
+      color = "black", linewidth = 0.6, alpha = 0.9,
       position = ggplot2::position_dodge(width = 0.75)
-    ) +
-    ggplot2::geom_point(
-      shape = 21, color = "black", size = 2.4, stroke = 0.5, alpha = 0.85,
-      position = ggplot2::position_jitterdodge(
-        jitter.width = 0.15, dodge.width = 0.75
-      ),
-      show.legend = FALSE
     ) +
     ggplot2::theme_minimal(base_size = 14) +
     ggplot2::theme(
@@ -200,7 +201,7 @@ boxplot_summary <- function(df, y_var, x_var, fill_var, facet_var) {
   if (use_fill) {
     p <- p + ggplot2::scale_fill_manual(values = okabe_ito)
   }
-  if (!is.null(facet_var) && facet_var != "_none") {
+  if (use_facet) {
     p <- p + ggplot2::facet_wrap(ggplot2::vars(.data[[facet_var]]), ncol = 1)
   }
   p
@@ -333,7 +334,7 @@ phase_outputs_encoding <- function(ns_id) {
     nav_panel(
       "Summary plots",
       card(
-        card_header("Box plots — encoding summary (one dot per participant)"),
+        card_header("Bar graphs — encoding summary (group means)"),
         layout_columns(
           col_widths = c(3, 3, 3, 3),
           selectInput(ns("plot_y"), "Y metric",
@@ -449,11 +450,6 @@ phase_outputs_recognition <- function(ns_id) {
       DTOutput(ns("tbl_acc_cond"))
     ),
     nav_panel(
-      "Picture-duration QC",
-      dl_csv(ns("dl_duration")),
-      DTOutput(ns("tbl_duration"))
-    ),
-    nav_panel(
       "Validation (calibration)",
       dl_csv(ns("dl_validation")),
       DTOutput(ns("tbl_validation"))
@@ -491,7 +487,7 @@ phase_outputs_recognition <- function(ns_id) {
     nav_panel(
       "Summary plots",
       card(
-        card_header("Box plots — recognition summary (one dot per participant)"),
+        card_header("Bar graphs — recognition summary (group means)"),
         layout_columns(
           col_widths = c(3, 3, 3, 3),
           selectInput(ns("plot_y"), "Y metric",
@@ -783,7 +779,7 @@ encodingServer <- function(id) {
                              levels = c(TRUE, FALSE),
                              labels = c("on object", "off object"))
         )
-      boxplot_summary(df, input$plot_y, input$plot_x,
+      barplot_summary(df, input$plot_y, input$plot_x,
                       input$plot_fill, input$plot_facet)
     })
 
@@ -921,7 +917,7 @@ recognitionServer <- function(id) {
   moduleServer(id, function(input, output, session) {
     rv <- reactiveValues(
       behavioral = NULL, acc = NULL, acc_cond = NULL,
-      duration = NULL, validation = NULL, msg_events = NULL,
+      validation = NULL, msg_events = NULL,
       fixations = NULL,
       trial_missing = NULL, subject_missing = NULL,
       status = "Upload files, then click a Run button."
@@ -940,31 +936,6 @@ recognitionServer <- function(id) {
             rv$behavioral,
             groupvars = c("participant", "Condition")
           )
-          rv$duration <- map(paths, function(p) {
-            read_csv(p, show_col_types = FALSE) |>
-              filter(!is.na(back.started)) |>
-              slice_head(n = 90) |>
-              transmute(
-                participant   = extract_pid(p),
-                trial         = row_number(),
-                back_started  = suppressWarnings(as.numeric(back.started)),
-                back_stopped  = suppressWarnings(as.numeric(back.stopped)),
-                back_duration = back_stopped - back_started,
-                corrupt       = is.na(back_started) | is.na(back_stopped)
-              )
-          }) |>
-            list_rbind() |>
-            group_by(participant) |>
-            summarise(
-              n          = n(),
-              n_corrupt  = sum(corrupt),
-              min_dur    = min(back_duration, na.rm = TRUE),
-              median_dur = median(back_duration, na.rm = TRUE),
-              max_dur    = max(back_duration, na.rm = TRUE),
-              mean_dur   = mean(back_duration, na.rm = TRUE),
-              n_off_5s   = sum(abs(back_duration - 5) > 0.05, na.rm = TRUE),
-              .groups    = "drop"
-            )
           rv$status <- sprintf(
             "Background recognition: %d trials, %d participants.",
             nrow(rv$behavioral),
@@ -1113,7 +1084,6 @@ recognitionServer <- function(id) {
     output$tbl_behavioral <- renderDT(req(rv$behavioral) |> render_dt())
     output$tbl_acc <- renderDT(req(rv$acc) |> render_dt())
     output$tbl_acc_cond <- renderDT(req(rv$acc_cond) |> render_dt())
-    output$tbl_duration <- renderDT(req(rv$duration) |> render_dt())
     output$tbl_validation <- renderDT(req(rv$validation) |> render_dt())
     output$tbl_msg_events <- renderDT(req(rv$msg_events) |> render_dt())
     output$tbl_trial_missing   <- renderDT(req(rv$trial_missing)   |> render_dt())
@@ -1147,7 +1117,7 @@ recognitionServer <- function(id) {
                              labels = c("on object", "off object")),
           Condition = paste(emo, location, sep = "-")
         )
-      boxplot_summary(df, input$plot_y, input$plot_x,
+      barplot_summary(df, input$plot_y, input$plot_x,
                       input$plot_fill, input$plot_facet)
     })
 
@@ -1286,7 +1256,6 @@ recognitionServer <- function(id) {
     output$dl_behavioral <- make_dl(reactive(req(rv$behavioral)), "recognition_behavioral.csv")
     output$dl_acc <- make_dl(reactive(req(rv$acc)), "recognition_accuracy.csv")
     output$dl_acc_cond <- make_dl(reactive(req(rv$acc_cond)), "recognition_accuracy_by_condition.csv")
-    output$dl_duration <- make_dl(reactive(req(rv$duration)), "recognition_duration_summary.csv")
     output$dl_validation <- make_dl(reactive(req(rv$validation)), "recognition_validation.csv")
     output$dl_msg_events <- make_dl(reactive(req(rv$msg_events)), "recognition_msg_events.csv")
     output$dl_trial_missing   <- make_dl(reactive(req(rv$trial_missing)),   "recognition_missing_per_trial.csv")
