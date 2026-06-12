@@ -15,6 +15,13 @@ source(file.path("R", "pipeline.R"))
 
 options(shiny.maxRequestSize = 2 * 1024^3)
 
+# Round non-integer numeric columns for display (downloads keep full precision).
+round_display <- function(tbl, digits = 3) {
+  num <- vapply(tbl, function(x) is.numeric(x) && !is.integer(x), logical(1))
+  tbl[num] <- lapply(tbl[num], round, digits = digits)
+  tbl
+}
+
 read_stim_image <- function(path) {
   ext <- tolower(tools::file_ext(path))
   if (ext %in% c("jpg", "jpeg")) {
@@ -755,7 +762,7 @@ encodingServer <- function(id) {
     })
 
     render_dt <- function(tbl) {
-      datatable(tbl,
+      datatable(round_display(tbl),
         options = list(pageLength = 10, scrollX = TRUE),
         rownames = FALSE
       )
@@ -1077,7 +1084,7 @@ recognitionServer <- function(id) {
     })
 
     render_dt <- function(tbl) {
-      datatable(tbl,
+      datatable(round_display(tbl),
         options = list(pageLength = 10, scrollX = TRUE),
         rownames = FALSE
       )
@@ -1332,7 +1339,7 @@ combinedServer <- function(id, enc_state, rec_state) {
     per_cd <- reactive(summarise_per_condition(fixations_long()))
 
     render_dt <- function(tbl) {
-      datatable(tbl,
+      datatable(round_display(tbl),
         options = list(pageLength = 10, scrollX = TRUE),
         rownames = FALSE
       )
@@ -1484,7 +1491,7 @@ objectServer <- function(id) {
     })
 
     render_dt <- function(tbl) {
-      datatable(tbl, options = list(pageLength = 10, scrollX = TRUE),
+      datatable(round_display(tbl), options = list(pageLength = 10, scrollX = TRUE),
                 rownames = FALSE)
     }
     output$tbl_trials   <- renderDT(trials_scoped()    |> render_dt())
@@ -1601,7 +1608,7 @@ recogComboServer <- function(id, enc_state, rec_state, obj_state) {
     summary_tbl <- reactive(recognition_joint_summary(combined()))
 
     render_dt <- function(tbl) {
-      datatable(tbl,
+      datatable(round_display(tbl),
         options = list(pageLength = 10, scrollX = TRUE),
         rownames = FALSE
       )
