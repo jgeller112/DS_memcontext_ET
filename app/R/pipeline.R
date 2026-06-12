@@ -160,6 +160,7 @@ recognition_accuracy <- function(data, groupvars = "participant",
       accuracy = n_correct / n_total,
       hit_rate = (n_hit + 0.5) / (n_old + 1),
       fa_rate  = (n_fa  + 0.5) / (n_new + 1),
+      corrected_acc = hit_rate - fa_rate,
       d_prime  = qnorm(hit_rate) - qnorm(fa_rate),
       c_bias   = -0.5 * (qnorm(hit_rate) + qnorm(fa_rate))
     )

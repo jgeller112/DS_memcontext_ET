@@ -935,7 +935,8 @@ recognitionServer <- function(id) {
           rv$acc_cond <- recognition_accuracy(
             rv$behavioral,
             groupvars = c("participant", "Condition")
-          )
+          ) |>
+            dplyr::select(participant, Condition, n_total, n_correct, accuracy)
           rv$status <- sprintf(
             "Background recognition: %d trials, %d participants.",
             nrow(rv$behavioral),
@@ -1454,7 +1455,8 @@ objectServer <- function(id) {
           rv$trials   <- trials
           rv$acc      <- recognition_accuracy(trials)
           rv$acc_cond <- recognition_accuracy(trials,
-                                             groupvars = c("participant", "Condition"))
+                                             groupvars = c("participant", "Condition")) |>
+            dplyr::select(participant, Condition, n_total, n_correct, accuracy)
           rv$acc_emo  <- recognition_accuracy(trials,
                                              groupvars = c("participant", "emo"))
           rv$status <- sprintf(
