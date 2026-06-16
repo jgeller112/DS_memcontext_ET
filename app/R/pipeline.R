@@ -166,6 +166,40 @@ recognition_accuracy <- function(data, groupvars = "participant",
     )
 }
 
+# Add a per-condition corrected accuracy (hit rate - false-alarm rate) to a
+# by-Condition accuracy table from recognition_accuracy(..., groupvars =
+# c("participant", "Condition")). Each Condition row is single-class — old
+# conditions ("<emo>-<location>", e.g. neg-left) hold only hits; foil
+# conditions ("foil_<emo>") hold only false alarms — so per-row FAR is
+# undefined for old conditions. We borrow the EMOTION-MATCHED foil FAR: a
+# negative old condition is corrected by the negative-foil FAR, a neutral old
+# condition by the neutral-foil FAR. Foils have no hit rate, so their
+# corrected_accuracy is left NA and only their raw accuracy is meaningful.
+add_condition_corrected_acc <- function(acc_cond) {
+  acc_cond <- acc_cond |>
+    mutate(
+      emo = case_when(
+        str_detect(Condition, "neg") ~ "neg",
+        str_detect(Condition, "neu") ~ "neu",
+        TRUE                         ~ NA_character_
+      ),
+      is_foil = str_detect(Condition, "foil")
+    )
+
+  # Raw foil false-alarm rate per (participant, emotion).
+  foil_far <- acc_cond |>
+    filter(is_foil, n_new > 0) |>
+    transmute(participant, emo, foil_fa_rate = n_fa / n_new)
+
+  acc_cond |>
+    left_join(foil_far, by = c("participant", "emo")) |>
+    mutate(
+      corrected_accuracy = if_else(
+        is_foil | n_old == 0, NA_real_, (n_hit / n_old) - foil_fa_rate
+      )
+    )
+}
+
 downsample_gaze <- function(dataframe, bin.length = 1000 / 120,
                             timevar = "timestamp",
                             aggvars = c("participant", "trial", "time_bin")) {

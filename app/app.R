@@ -946,7 +946,7 @@ recognitionServer <- function(id) {
             rv$behavioral,
             groupvars = c("participant", "Condition")
           ) |>
-            dplyr::mutate(corrected_accuracy = accuracy - (1 - accuracy)) |>
+            add_condition_corrected_acc() |>
             dplyr::select(participant, Condition, n_total, n_correct,
                           accuracy, corrected_accuracy)
           rv$status <- sprintf(
@@ -1458,7 +1458,7 @@ objectServer <- function(id) {
           rv$acc      <- recognition_accuracy(trials)
           rv$acc_cond <- recognition_accuracy(trials,
                                              groupvars = c("participant", "Condition")) |>
-            dplyr::mutate(corrected_accuracy = accuracy - (1 - accuracy)) |>
+            add_condition_corrected_acc() |>
             dplyr::select(participant, Condition, n_total, n_correct,
                           accuracy, corrected_accuracy)
           rv$acc_emo  <- recognition_accuracy(trials,
