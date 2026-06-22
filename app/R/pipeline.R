@@ -173,8 +173,10 @@ recognition_accuracy <- function(data, groupvars = "participant",
 # conditions ("foil_<emo>") hold only false alarms — so per-row FAR is
 # undefined for old conditions. We borrow the EMOTION-MATCHED foil FAR: a
 # negative old condition is corrected by the negative-foil FAR, a neutral old
-# condition by the neutral-foil FAR. Foils have no hit rate, so their
-# corrected_accuracy is left NA and only their raw accuracy is meaningful.
+# condition by the neutral-foil FAR. The foil rows are only used to source the
+# false-alarm rate; once it is folded into each old condition's
+# corrected_accuracy, they carry no hit rate of their own, so they are dropped
+# and the returned table holds only the old conditions.
 add_condition_corrected_acc <- function(acc_cond) {
   acc_cond <- acc_cond |>
     mutate(
@@ -192,10 +194,12 @@ add_condition_corrected_acc <- function(acc_cond) {
     transmute(participant, emo, foil_fa_rate = n_fa / n_new)
 
   acc_cond |>
+    filter(!is_foil) |>
     left_join(foil_far, by = c("participant", "emo")) |>
     mutate(
+      hit_rate_raw       = if_else(n_old == 0, NA_real_, n_hit / n_old),
       corrected_accuracy = if_else(
-        is_foil | n_old == 0, NA_real_, (n_hit / n_old) - foil_fa_rate
+        n_old == 0, NA_real_, hit_rate_raw - foil_fa_rate
       )
     )
 }

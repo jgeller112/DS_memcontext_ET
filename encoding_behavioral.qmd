@@ -37,8 +37,8 @@ runs against TD; flip the paths in the `paths` chunk to run DS.
 | `gaze_trial`, `recognition_gaze_trial` | gaze samples assigned to trials |
 | `fixations`, `recognition_fixations` | I-VT fixation events |
 | `fix_labeled` | encoding fixations + AOI label (Left / Right / Outside) |
-| `recognition_acc`, `recognition_acc_by_condition` | hit/FA/d′/c (background) |
-| `object_acc`, `object_acc_by_emotion` | object old/new memory: hit/FA/d′/c, overall + by emotion |
+| `recognition_acc`, `recognition_acc_by_condition` | hit/FA/d′/c (background); by-condition adds corrected accuracy (HR − emotion-matched foil FAR) |
+| `object_acc`, `object_acc_by_emotion`, `object_acc_by_condition` | object old/new memory: hit/FA/d′/c overall, by emotion, and by condition (+ corrected accuracy) |
 | `validation`, `recognition_validation` | per-validation calibration metrics |
 | `reinstatement` | encoding↔recognition fixation-pattern similarity |
 | `auc_reinstatement` | Left/Right gaze discriminability (AUC) per phase × emotion |
@@ -141,6 +141,7 @@ corresponding folder.
 | `read_msg` | Tobii msg CSV | one row per event message |
 | `parse_validation` | a `msg` tibble | one row per validation block, metrics as numeric columns |
 | `recognition_accuracy` | recognition tibble | per-group HR / FAR / d′ / c (log-linear corrected) |
+| `add_condition_corrected_acc` | by-Condition accuracy tibble | adds corrected accuracy (HR − emotion-matched foil FAR) |
 | `downsample_gaze` | gaze tibble | gaze binned to a fixed sample rate |
 
 ```{r loaders}
@@ -293,6 +294,45 @@ recognition_accuracy <- function(data, groupvars = "participant",
       fa_rate  = (n_fa  + 0.5) / (n_new + 1),
       d_prime  = qnorm(hit_rate) - qnorm(fa_rate),
       c_bias   = -0.5 * (qnorm(hit_rate) + qnorm(fa_rate))
+    )
+}
+
+# Add a per-condition corrected accuracy (hit rate - false-alarm rate) to a
+# by-Condition accuracy table from recognition_accuracy(..., groupvars =
+# c("participant", "Condition")). Each Condition row is single-class — old
+# conditions ("<emo>-<location>", e.g. neg-left) hold only hits; foil
+# conditions ("foil_<emo>") hold only false alarms — so per-row FAR is
+# undefined for old conditions. We borrow the EMOTION-MATCHED foil FAR: a
+# negative old condition is corrected by the negative-foil FAR, a neutral old
+# condition by the neutral-foil FAR. Raw proportions are used so the value
+# lines up with the displayed accuracy. The foil rows are only used to source
+# the false-alarm rate; once it is folded into each old condition's
+# corrected_accuracy they carry no hit rate of their own, so they are dropped
+# and the returned table holds only the old conditions.
+add_condition_corrected_acc <- function(acc_cond) {
+  acc_cond <- acc_cond |>
+    mutate(
+      emo = case_when(
+        str_detect(Condition, "neg") ~ "neg",
+        str_detect(Condition, "neu") ~ "neu",
+        TRUE                         ~ NA_character_
+      ),
+      is_foil = str_detect(Condition, "foil")
+    )
+
+  # Raw foil false-alarm rate per (participant, emotion).
+  foil_far <- acc_cond |>
+    filter(is_foil, n_new > 0) |>
+    transmute(participant, emo, foil_fa_rate = n_fa / n_new)
+
+  acc_cond |>
+    filter(!is_foil) |>
+    left_join(foil_far, by = c("participant", "emo")) |>
+    mutate(
+      hit_rate_raw       = if_else(n_old == 0, NA_real_, n_hit / n_old),
+      corrected_accuracy = if_else(
+        n_old == 0, NA_real_, hit_rate_raw - foil_fa_rate
+      )
     )
 }
 
@@ -948,13 +988,25 @@ Per-participant hit rate, false-alarm rate, overall accuracy, d-prime, and
 criterion. Pass `groupvars = c("participant", "Condition")` to break it down
 by encoding condition.
 
+The by-condition table adds `corrected_accuracy = hit rate − emotion-matched
+foil false-alarm rate` (raw proportions). Each Condition row is single-class —
+old conditions (`<emo>-<location>`, e.g. `neg-left`) hold only hits and foil
+conditions (`foil_<emo>`) hold only false alarms — so `add_condition_corrected_acc()`
+borrows the false-alarm rate from the emotion-matched foils: negative old
+conditions use `FAR(foil_neg)`, neutral old conditions use `FAR(foil_neu)`.
+The foils supply the false-alarm rate only and are then dropped, so the table
+lists just the four old conditions.
+
 ```{r recognition-accuracy}
 recognition_acc <- recognition_accuracy(recognition)
 recognition_acc
 
 recognition_acc_by_condition <- recognition_accuracy(
   recognition, groupvars = c("participant", "Condition")
-)
+) |>
+  add_condition_corrected_acc() |>
+  select(participant, Condition, n_total, n_correct, accuracy,
+         n_hit, hit_rate_raw, foil_fa_rate, corrected_accuracy)
 recognition_acc_by_condition
 ```
 
@@ -1005,6 +1057,13 @@ run the same signal-detection summary, overall and split by emotion. For each
 emotion, hits come from old objects of that emotion and false alarms from
 foils of that emotion.
 
+We also break object memory down by `Condition` and add `corrected_accuracy`
+(hit rate − emotion-matched foil false-alarm rate) the same way as the
+background table: `neg-left` / `neg-right` subtract `FAR(foil_neg)` and
+`neu-left` / `neu-right` subtract `FAR(foil_neu)`. The foils supply the
+false-alarm rate only and are then dropped, so the table lists just the four
+old conditions.
+
 ```{r object-recognition-behavioral}
 object_recognition <- map(recognition_behavioral_files, read_object_recognition) |>
   list_rbind()
@@ -1020,6 +1079,14 @@ object_acc_by_emotion <- recognition_accuracy(
   object_recognition, groupvars = c("participant", "emo")
 )
 object_acc_by_emotion
+
+object_acc_by_condition <- recognition_accuracy(
+  object_recognition, groupvars = c("participant", "Condition")
+) |>
+  add_condition_corrected_acc() |>
+  select(participant, Condition, n_total, n_correct, accuracy,
+         n_hit, hit_rate_raw, foil_fa_rate, corrected_accuracy)
+object_acc_by_condition
 ```
 
 ```{r object-recognition-plot, fig.width = 6, fig.height = 4.5}
@@ -1658,6 +1725,7 @@ separate.
 | `object_recognition_behavioral.csv` | per-trial object old/new recognition |
 | `object_recognition_accuracy.csv` | object HR / FAR / accuracy / d′ / c per participant |
 | `object_recognition_accuracy_by_emotion.csv` | object memory split by emotion (neg / neu) |
+| `object_recognition_accuracy_by_condition.csv` | object memory by Condition + corrected accuracy (HR − emotion-matched foil FAR) |
 | `validation_encoding.csv`, `validation_recognition.csv` | calibration metrics per validation block |
 | `missing_per_trial_{encoding,recognition}.csv` | per (participant, trial) NA-sample count + prop_missing in the 5-s window |
 | `missing_per_subject_{encoding,recognition}.csv` | per-participant rollup of prop_missing across trials |
@@ -1686,9 +1754,10 @@ write_csv(recognition_acc_by_condition, out("recognition_accuracy_by_condition.c
 write_csv(recognition_duration_summary, out("recognition_duration_summary.csv"))
 
 # Object recognition memory
-write_csv(object_recognition,    out("object_recognition_behavioral.csv"))
-write_csv(object_acc,            out("object_recognition_accuracy.csv"))
-write_csv(object_acc_by_emotion, out("object_recognition_accuracy_by_emotion.csv"))
+write_csv(object_recognition,      out("object_recognition_behavioral.csv"))
+write_csv(object_acc,              out("object_recognition_accuracy.csv"))
+write_csv(object_acc_by_emotion,   out("object_recognition_accuracy_by_emotion.csv"))
+write_csv(object_acc_by_condition, out("object_recognition_accuracy_by_condition.csv"))
 
 # Eye-tracking quality + events
 write_csv(validation,             out("validation_encoding.csv"))

@@ -167,17 +167,24 @@ One row per participant. Log-linear-corrected signal-detection metrics (Hautus 1
 | `c_bias` | num | `-0.5 * (qnorm(hit_rate) + qnorm(fa_rate))` — response criterion |
 
 ## `recognition_accuracy_by_condition.csv`
-Same metrics as above, grouped by `(participant, Condition)`. Columns identical plus `Condition`. The app surfaces `participant`, `Condition`, `n_total`, `n_correct`, `accuracy`, and `corrected_accuracy`.
+Grouped by `(participant, Condition)` and restricted to the **old** conditions (`neg-left`, `neg-right`, `neu-left`, `neu-right`) — foil rows are dropped, since on their own they carry no hit rate. The app surfaces `participant`, `Condition`, `n_total`, `n_correct`, `accuracy`, `n_hit`, `hit_rate_raw`, `foil_fa_rate`, and `corrected_accuracy`.
+
+| column | type | meaning |
+|---|---|---|
+| `n_hit` | int | hits in this Condition (old items answered "old") |
+| `hit_rate_raw` | num | `n_hit / n_old` — raw hit rate |
+| `foil_fa_rate` | num | raw false-alarm rate of the **emotion-matched** foils, `n_fa(foil_e) / n_new(foil_e)` |
+| `corrected_accuracy` | num | `hit_rate_raw − foil_fa_rate` |
 
 `corrected_accuracy` is the hit rate minus the **emotion-matched** foil false-alarm rate, using raw (uncorrected) proportions per participant. Let `e ∈ {neg, neu}` be the emotion of an old condition and let the matching foil be `foil_<e>`:
 
 ```
-HR(cond)        = n_hit(cond) / n_old(cond)            # old conditions only
-FAR(foil_e)     = n_fa(foil_e) / n_new(foil_e)         # emotion-matched foils
-corrected_accuracy(cond) = HR(cond) − FAR(foil_e)      # e.g. neg-left uses FAR(foil_neg)
+hit_rate_raw(cond) = n_hit(cond) / n_old(cond)
+foil_fa_rate(e)    = n_fa(foil_e) / n_new(foil_e)      # emotion-matched foils
+corrected_accuracy(cond) = hit_rate_raw(cond) − foil_fa_rate(e)   # e.g. neg-left uses foil_neg
 ```
 
-So `neg-left` and `neg-right` both subtract `FAR(foil_neg)`, while `neu-left` and `neu-right` subtract `FAR(foil_neu)`. Foils have no hit rate (`n_old = 0`), so their `corrected_accuracy` is `NA` and only their raw `accuracy = n_correct / n_total` is meaningful. (These raw rates differ from the log-linear `hit_rate` / `fa_rate` above, which add the `(x+0.5)/(n+1)` correction for d′.)
+So `neg-left` and `neg-right` both subtract the `foil_neg` false-alarm rate, while `neu-left` and `neu-right` subtract the `foil_neu` rate. The foils supply the false-alarm rate only and are not themselves listed. (These raw rates differ from the log-linear `hit_rate` / `fa_rate` of the per-participant table, which add the `(x+0.5)/(n+1)` correction for d′.)
 
 ## `recognition_duration_summary.csv`
 QC on back-task picture-display duration. Each back-task picture should be on screen ~5 s.
@@ -294,17 +301,24 @@ Per-trial object old/new recognition, from the **Object Memory** tab. Pulled fro
 Per-participant signal-detection object memory (same columns as `recognition_accuracy.csv`): `n_old`, `n_new`, `n_hit`, `n_cr`, `n_fa`, `n_miss`, `accuracy`, `hit_rate`, `fa_rate`, `d_prime`, `c_bias`. Hit/FA rates use the (x+0.5)/(n+1) log-linear correction.
 
 ## `object_recognition_accuracy_by_condition.csv`
-Same columns as above, one row per `(participant, Condition)` — object memory split by the encoding `Condition` (`<emo>-<location>` for old objects, `foil_<emo>` for foils). Mirrors `recognition_accuracy_by_condition.csv`: the app surfaces `participant`, `Condition`, `n_total`, `n_correct`, `accuracy`, and `corrected_accuracy`. Note that old and foil items carry different `Condition` labels, so within a single old condition there are no foils (and vice versa).
+One row per `(participant, Condition)`, restricted to the **old** object conditions (`<emo>-<location>`) — foil rows (`foil_<emo>`) are dropped, since on their own they carry no hit rate. Mirrors `recognition_accuracy_by_condition.csv`: the app surfaces `participant`, `Condition`, `n_total`, `n_correct`, `accuracy`, `n_hit`, `hit_rate_raw`, `foil_fa_rate`, and `corrected_accuracy`.
+
+| column | type | meaning |
+|---|---|---|
+| `n_hit` | int | hits in this Condition |
+| `hit_rate_raw` | num | `n_hit / n_old` — raw hit rate |
+| `foil_fa_rate` | num | raw false-alarm rate of the **emotion-matched** foils, `n_fa(foil_e) / n_new(foil_e)` |
+| `corrected_accuracy` | num | `hit_rate_raw − foil_fa_rate` |
 
 `corrected_accuracy` is the hit rate minus the **emotion-matched** foil false-alarm rate, using raw (uncorrected) proportions per participant. For an old condition with emotion `e ∈ {neg, neu}` and matching foil `foil_<e>`:
 
 ```
-HR(cond)        = n_hit(cond) / n_old(cond)            # old conditions only
-FAR(foil_e)     = n_fa(foil_e) / n_new(foil_e)         # emotion-matched foils
-corrected_accuracy(cond) = HR(cond) − FAR(foil_e)      # e.g. neg-left uses FAR(foil_neg)
+hit_rate_raw(cond) = n_hit(cond) / n_old(cond)
+foil_fa_rate(e)    = n_fa(foil_e) / n_new(foil_e)      # emotion-matched foils
+corrected_accuracy(cond) = hit_rate_raw(cond) − foil_fa_rate(e)   # e.g. neg-left uses foil_neg
 ```
 
-`neg-left` / `neg-right` subtract `FAR(foil_neg)`; `neu-left` / `neu-right` subtract `FAR(foil_neu)`. Foils have no hit rate (`n_old = 0`), so their `corrected_accuracy` is `NA` and only their raw `accuracy = n_correct / n_total` is meaningful.
+`neg-left` / `neg-right` subtract the `foil_neg` false-alarm rate; `neu-left` / `neu-right` subtract the `foil_neu` rate. The foils supply the false-alarm rate only and are not themselves listed.
 
 ## `object_recognition_accuracy_by_emotion.csv`
 Same columns as above, one row per `(participant, emo)` — object memory split by emotion (negative vs. neutral). For each emotion, hits come from old objects of that emotion and false alarms from foils of that emotion. (Unlike the by-Condition table, each emotion contains both old and foil items, so `d_prime` is well defined here.)
